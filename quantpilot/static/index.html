@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>QuantPilot · 量化控制台</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <section id="login-screen" class="login-screen">
+      <div class="login-brand">
+        <div class="logo large">Q<span>↗</span></div>
+        <p class="eyebrow">QUANTPILOT / CONTROL ROOM</p>
+        <h1>让每一笔决策，<br />有据可循。</h1>
+        <p>连接行情，验证策略，守住风险边界。</p>
+        <div class="login-line"></div>
+        <p class="small">模拟盘优先 · 多交易所行情 · 全程审计</p>
+      </div>
+      <form id="login-form" class="login-card">
+        <p class="eyebrow">WELCOME BACK</p>
+        <h2>登录控制台</h2>
+        <p class="muted">使用部署时设置的管理员账号。</p>
+        <label
+          >用户名<input
+            id="username"
+            name="username"
+            autocomplete="username"
+            required /></label
+        ><label
+          >密码<input
+            id="password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            required /></label
+        ><button class="primary" type="submit">
+          进入 QuantPilot <span>↗</span>
+        </button>
+        <p id="login-error" role="alert" class="error"></p>
+        <p class="fine">真实交易已锁定，登录后仅可进行模拟交易。</p>
+      </form>
+    </section>
+    <div id="console" class="shell" hidden>
+      <aside>
+        <a href="/" class="brand"
+          ><div class="logo">Q<span>↗</span></div>
+          QuantPilot</a
+        >
+        <div class="workspace">
+          <span class="workspace-dot"></span>
+          <div>个人交易工作区<small>现货 / 模拟账户</small></div>
+        </div>
+        <p class="nav-caption">工作台</p>
+        <nav>
+          <button data-page="overview" class="nav active">
+            ◫ <span>总览</span></button
+          ><button data-page="strategy" class="nav">
+            ⌁ <span>策略引擎</span></button
+          ><button data-page="orders" class="nav">
+            ≡ <span>订单与审计</span></button
+          ><button data-page="connections" class="nav">
+            ⊞ <span>连接与设置</span>
+          </button>
+        </nav>
+        <div class="side-bottom">
+          <div class="safety-card">
+            <span>◈</span><strong>先验证，再执行</strong>
+            <p>风控始终优先。AI 建议不能直接触发交易。</p>
+          </div>
+          <button id="logout" class="text-button">退出登录 ↗</button
+          ><small>QuantPilot 0.1 / PAPER EDITION</small>
+        </div>
+      </aside>
+      <main>
+        <header>
+          <div class="breadcrumb">
+            工作台 <span>/</span> <b id="page-name">总览</b>
+          </div>
+          <div class="header-right">
+            <span class="badge paper">● 模拟盘</span
+            ><span class="badge locked">实盘已锁定</span>
+            <div class="avatar" id="avatar">Q</div>
+          </div>
+        </header>
+        <div class="content">
+          <div class="title-row">
+            <div>
+              <p class="eyebrow">YOUR TRADING, IN PERSPECTIVE</p>
+              <h1 id="page-title">交易总览</h1>
+              <p class="muted" id="page-subtitle">看清市场，保持纪律。</p>
+            </div>
+            <div class="title-actions">
+              <span id="updated" class="small muted"></span
+              ><button id="refresh" class="secondary">↻ 刷新</button
+              ><button id="kill" class="danger">暂停开仓</button>
+            </div>
+          </div>
+          <div id="global-error" class="notice error" hidden role="alert"></div>
+          <div id="demo-notice" class="notice" hidden>
+            演示数据模式：图表与报价均为合成数据，不代表真实市场。模拟资产无真实价值。
+          </div>
+          <div id="kill-notice" class="notice" hidden>
+            开仓已暂停，策略已停用。已有仓位的模拟止盈止损仍继续检查。
+          </div>
+          <section data-panel="overview">
+            <div class="metrics">
+              <article class="metric">
+                <label>模拟账户权益 <span>USDT</span></label
+                ><strong id="equity">—</strong>
+                <p>初始资金 <span id="initial-cash">—</span></p>
+              </article>
+              <article class="metric">
+                <label>当日权益变动 <span>UTC</span></label
+                ><strong id="day-pnl">—</strong>
+                <p>包含已实现与未实现盈亏</p>
+              </article>
+              <article class="metric">
+                <label>当前持仓敞口 <span>USDT</span></label
+                ><strong id="exposure">—</strong>
+                <p>上限 <span id="exposure-limit">—</span></p>
+              </article>
+              <article class="metric">
+                <label>可用模拟资金 <span>USDT</span></label
+                ><strong id="cash">—</strong>
+                <p>累计手续费 <span id="fees">—</span></p>
+              </article>
+            </div>
+            <div class="market-layout">
+              <article class="card chart-card">
+                <div class="card-heading">
+                  <div>
+                    <p class="eyebrow">MARKET OVERVIEW</p>
+                    <h2>市场观察</h2>
+                  </div>
+                  <div class="selectors">
+                    <select id="exchange" aria-label="交易所"></select
+                    ><select id="symbol" aria-label="交易对"></select
+                    ><select id="timeframe" aria-label="K线周期">
+                      <option value="5m">5 分钟</option>
+                      <option value="15m">15 分钟</option>
+                      <option value="1h" selected>1 小时</option>
+                      <option value="4h">4 小时</option>
+                      <option value="1d">日线</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="quote-row">
+                  <strong id="price">—</strong
+                  ><span id="quote-meta" class="muted small">等待行情</span>
+                </div>
+                <svg
+                  id="chart"
+                  viewBox="0 0 820 260"
+                  role="img"
+                  aria-label="已完成K线的收盘价图"
+                ></svg>
+                <div class="chart-footer">
+                  <span id="chart-start">—</span
+                  ><span>已完成 K 线 · 收盘价</span
+                  ><span id="chart-end">—</span>
+                </div>
+                <p id="market-error" class="error small" role="alert"></p>
+              </article>
+              <article class="card signal-card">
+                <div class="card-heading">
+                  <h2>策略观察</h2>
+                  <span class="tag">EMA + RSI</span>
+                </div>
+                <div id="signal" class="signal">等待数据</div>
+                <p id="signal-reason" class="muted">行情到达后生成策略信号。</p>
+                <dl class="indicator-list">
+                  <div>
+                    <dt>EMA 20 / 50</dt>
+                    <dd id="ema">—</dd>
+                  </div>
+                  <div>
+                    <dt>RSI 14</dt>
+                    <dd id="rsi">—</dd>
+                  </div>
+                  <div>
+                    <dt>ATR 14</dt>
+                    <dd id="atr">—</dd>
+                  </div>
+                  <div>
+                    <dt>成交量比</dt>
+                    <dd id="volume">—</dd>
+                  </div>
+                </dl>
+                <p class="fine" id="validity">信号有时效限制，不保证收益。</p>
+                <button id="ai-advice" class="secondary full">
+                  ✧ 请求 AI 风险复核
+                </button>
+                <div id="advice" class="small"></div>
+              </article>
+            </div>
+            <div class="bottom-layout">
+              <article class="card">
+                <div class="card-heading">
+                  <h2>当前持仓</h2>
+                  <span class="tag">现货多头</span>
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>市场</th>
+                        <th>数量</th>
+                        <th>成本 / USDT</th>
+                        <th>止损</th>
+                        <th>止盈</th>
+                      </tr>
+                    </thead>
+                    <tbody id="positions"></tbody>
+                  </table>
+                </div>
+                <p class="fine">
+                  止盈止损每 15 秒轮询；停机、断网和跳空会影响模拟退出。
+                </p>
+              </article>
+              <article class="card order-card">
+                <div class="card-heading">
+                  <h2>模拟下单</h2>
+                  <span class="tag">限价 IOC</span>
+                </div>
+                <form id="order-form">
+                  <div class="field-pair">
+                    <label
+                      >方向<select id="order-side">
+                        <option value="buy">买入开仓</option>
+                        <option value="sell">卖出减仓</option>
+                      </select></label
+                    ><label
+                      >数量（基础资产）<input
+                        id="order-quantity"
+                        inputmode="decimal"
+                        placeholder="例如 0.001"
+                        required
+                    /></label>
+                  </div>
+                  <label
+                    >限价 / USDT<input
+                      id="order-limit"
+                      inputmode="decimal"
+                      required
+                  /></label>
+                  <div class="field-pair">
+                    <label
+                      >止损价格<input
+                        id="order-stop"
+                        inputmode="decimal" /></label
+                    ><label
+                      >止盈价格<input id="order-take" inputmode="decimal"
+                    /></label>
+                  </div>
+                  <button class="primary full" type="submit">
+                    提交模拟订单 ↗
+                  </button>
+                  <p id="order-result" class="small" role="status"></p>
+                </form>
+              </article>
+            </div>
+          </section>
+          <section data-panel="strategy" hidden>
+            <div class="two-column">
+              <article class="card">
+                <p class="eyebrow">AUTOMATION WITH BOUNDARIES</p>
+                <h2>自动模拟策略</h2>
+                <p class="muted">
+                  使用已完成 K 线。每根 K
+                  线最多一次同向操作；已有仓位不继续加仓。重启后需重新启用。
+                </p>
+                <form id="strategy-form">
+                  <label>交易所<select id="strategy-exchange"></select></label
+                  ><label>交易对<select id="strategy-symbol"></select></label
+                  ><label
+                    >周期<select id="strategy-timeframe">
+                      <option value="5m">5m</option>
+                      <option value="15m">15m</option>
+                      <option value="1h">1h</option>
+                      <option value="4h">4h</option>
+                      <option value="1d">1d</option>
+                    </select></label
+                  ><label
+                    >单次预算 / USDT<input
+                      id="strategy-budget"
+                      value="100"
+                      required
+                  /></label>
+                  <div class="field-pair">
+                    <label
+                      >止损比例（0.02 = 2%）<input
+                        id="strategy-stop"
+                        value="0.02"
+                        required /></label
+                    ><label
+                      >止盈比例<input id="strategy-take" value="0.04" required
+                    /></label>
+                  </div>
+                  <label class="checkbox"
+                    ><input
+                      type="checkbox"
+                      id="strategy-enabled"
+                    />启用自动模拟交易</label
+                  ><button class="primary" type="submit">保存策略</button>
+                  <p id="strategy-result" role="status"></p>
+                </form>
+              </article>
+              <article class="card">
+                <h2>风控边界</h2>
+                <dl id="risk-limits" class="indicator-list"></dl>
+                <div class="notice">
+                  行情过期、价差过大、余额不足或估值失败时拒绝开仓。减仓可在每日亏损限制和暂停开仓期间继续执行。
+                </div>
+                <h3>策略逻辑</h3>
+                <p class="muted">
+                  EMA20 高于 EMA50、RSI14 在 45–70 之间且量比 ≥ 0.8
+                  时产生买入信号；EMA20 低于 EMA50 时退出已有多头。
+                </p>
+                <p class="fine">
+                  固定规则示例策略，不构成收益承诺。没有杠杆、合约、做空或实盘下单。
+                </p>
+              </article>
+            </div>
+          </section>
+          <section data-panel="orders" hidden>
+            <article class="card">
+              <div class="card-heading">
+                <h2>最近订单</h2>
+                <span class="tag">最近 100 条</span>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>时间</th>
+                      <th>市场</th>
+                      <th>方向</th>
+                      <th>数量</th>
+                      <th>成交价格</th>
+                      <th>结果</th>
+                    </tr>
+                  </thead>
+                  <tbody id="orders"></tbody>
+                </table>
+              </div>
+            </article>
+            <article class="card audit-card">
+              <h2>操作审计</h2>
+              <div id="audit"></div>
+            </article>
+          </section>
+          <section data-panel="connections" hidden>
+            <div class="two-column">
+              <article class="card">
+                <p class="eyebrow">CONNECTED, UNDER CONTROL</p>
+                <h2>连接凭据</h2>
+                <p class="muted">
+                  公共行情不需要密钥。账户查询请使用仅有读取权限的交易所密钥。
+                </p>
+                <form id="credentials-form">
+                  <label>服务<select id="provider"></select></label
+                  ><label
+                    >API Key<input
+                      id="api-key"
+                      type="password"
+                      autocomplete="off"
+                      required /></label
+                  ><label
+                    >API Secret（OpenAI 留空）<input
+                      id="api-secret"
+                      type="password"
+                      autocomplete="off" /></label
+                  ><label
+                    >Passphrase（按交易所要求）<input
+                      id="passphrase"
+                      type="password"
+                      autocomplete="off" /></label
+                  ><button class="primary" type="submit">加密保存</button>
+                  <p id="credentials-result" role="status"></p>
+                </form>
+                <p class="fine">
+                  密钥只在服务器使用，不回显。不会自动测试或提交真实订单。
+                </p>
+              </article>
+              <article class="card">
+                <h2>连接状态</h2>
+                <div id="connection-list"></div>
+                <pre id="balance-result"></pre>
+                <h3>OpenAI 风险复核</h3>
+                <p class="muted">
+                  默认关闭。设置模型并启用后，点击按钮才会发起付费 API
+                  请求。仅发送模拟账户汇总和公共指标；结果不影响订单权限。
+                </p>
+                <form id="ai-settings-form">
+                  <label
+                    >OpenAI 模型 ID<input
+                      id="ai-model"
+                      placeholder="填写账号可用的模型 ID"
+                      autocomplete="off" /></label
+                  ><label class="checkbox"
+                    ><input type="checkbox" id="ai-enabled" />启用可选 AI
+                    复核（使用时会产生 API 费用）</label
+                  ><button class="secondary" type="submit">保存 AI 设置</button>
+                  <p id="ai-settings-result" role="status" class="small"></p>
+                </form>
+                <h3>真实交易</h3>
+                <p class="muted">
+                  本版本没有真实订单发送通道。配置开关、API 请求和 AI
+                  输出均不能解除此锁定。
+                </p>
+              </article>
+            </div>
+          </section>
+          <footer>
+            <span
+              ><span class="status-dot"></span>
+              <span id="system-status">控制台已连接</span></span
+            ><span>所有金额均为模拟 · 风控优先</span>
+          </footer>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

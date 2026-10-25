@@ -1,0 +1,7 @@
+-c requirements.lock
+pytest
+pytest-cov
+ruff
+pip-audit
+setuptools
+wheel

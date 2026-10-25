@@ -1,0 +1,35 @@
+[Unit]
+Description=QuantPilot paper trading console
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=quantpilot
+Group=quantpilot
+WorkingDirectory=/var/lib/quantpilot
+Environment=QP_CONFIG=/var/lib/quantpilot/config.json
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/quantpilot/current/.venv/bin/qp serve
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=60
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/quantpilot
+CapabilityBoundingSet=
+LockPersonality=true
+LimitNOFILE=4096
+MemoryMax=768M
+
+[Install]
+WantedBy=multi-user.target
