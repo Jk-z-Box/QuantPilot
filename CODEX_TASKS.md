@@ -15,8 +15,9 @@
 ## 需要外部输入或环境
 
 - [ ] 导入用户提供的原始 starter ZIP，审查原始 README/CODEX_TASKS，比较后合并。本次 `/mnt/data` 不可访问，不得声称已经导入。
-- [x] 创建私有 GitHub 仓库 `Jk-z-Box/QuantPilot`。此次上传使用用户再次明确授权的临时内存凭据，不在本项目保存；后续应换用安全连接或 OAuth/SSH。
-- [ ] 完成远程提交核验，并在有 workflow 权限的授权下启用 `ci/github-actions.yml`：移动至 `.github/workflows/ci.yml` 后检查 CI。当前 Token 没有 workflow 权限，故只上传模板。
+- [x] 创建 GitHub 仓库并按用户要求设为公开： `Jk-z-Box/QuantPilot`。此次上传使用用户再次明确授权的临时内存凭据，不在本项目保存；后续应换用安全连接或 OAuth/SSH。
+- [x] 上传项目，逐文件比对远程 Git blob，并交付固定提交的公开安装命令。
+- [ ] 在有 workflow 权限的授权下启用 `ci/github-actions.yml`：移动至 `.github/workflows/ci.yml` 后检查 CI。当前 Token 没有 workflow 权限，故只上传模板。
 - [ ] 在用户 Linux 主机或独立测试虚拟机实际验收首次安装、更新、回滚、重启及备份恢复。
 - [ ] 获得实际域名/服务器信息后配置 Cloudflare DNS、Origin Rules、证书、防火墙，并从最终域名验收。
 - [ ] 用用户自行保存的只读密钥做各交易所账户查询验收。自动测试只使用替身，不证明账户权限正确。

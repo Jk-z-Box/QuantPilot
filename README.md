@@ -120,7 +120,7 @@ python -m pip_audit -r requirements.lock --disable-pip
 
 聊天里曾出现的 GitHub Token 必须撤销。项目不使用该 Token。后续授权使用 GitHub 安全连接或用户自行配置的 OAuth/SSH。此次发布经用户明确授权，凭据仅临时在进程内存中用于 GitHub API；未写入文件、Git 配置、仓库 URL 或输出。不要把 Token 放进仓库 URL、命令参数或安装脚本。
 
-仓库地址：<https://github.com/Jk-z-Box/QuantPilot>（私有）。安装命令和 CI 启用步骤见部署手册；仓库发布不代表已经部署到 Linux 服务器。
+仓库地址：<https://github.com/Jk-z-Box/QuantPilot>（公开）。安装命令和 CI 启用步骤见部署手册；仓库发布不代表已经部署到 Linux 服务器。
 
 ## 设计与资料
 

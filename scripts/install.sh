@@ -56,7 +56,7 @@ install -d -m 700 -o quantpilot -g quantpilot "$DATA_DIR"
 RELEASE_DIR="$(mktemp -d "$ROOT_DIR/releases/$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"
 chmod 755 "$RELEASE_DIR"
 # Select tracked application files; exclude local credentials, databases and Git history.
-for item in quantpilot scripts docs tests pyproject.toml requirements.lock requirements-dev.lock README.md CODEX_TASKS.md; do
+for item in quantpilot scripts docs tests ci install.sh pyproject.toml requirements.lock requirements-dev.lock README.md CODEX_TASKS.md; do
   if [[ -e "$SOURCE_DIR/$item" ]]; then cp -R "$SOURCE_DIR/$item" "$RELEASE_DIR/"; fi
 done
 find "$RELEASE_DIR" -type d -name __pycache__ -prune -exec rm -rf {} +

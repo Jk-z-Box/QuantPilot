@@ -96,17 +96,21 @@ sudo bash scripts/install.sh --upgrade
 
 ## GitHub 仓库与远程安装
 
-仓库：<https://github.com/Jk-z-Box/QuantPilot>，默认私有。本次按用户明确授权，仅在进程内存中使用凭据调用 GitHub API；凭据不写入项目或 Git 配置。后续访问建议使用 GitHub CLI 的浏览器 OAuth 登录或 SSH。
+仓库：<https://github.com/Jk-z-Box/QuantPilot>，按用户要求公开。服务器下载不需要 GitHub 账号或 Token。
 
-服务器需要 GitHub CLI，并先正常完成 `gh auth login --web`。随后可用一条命令下载到临时目录并启动交互安装：
+根目录 `install.sh` 是公开引导安装器，要求 `--ref` 指定经过验证的完整 40 位提交 ID。它从 GitHub HTTPS 下载对应源码，解压到私有临时目录，然后运行项目安装器；退出时清理临时文件。原始安装器仍交互设置端口、账号和密码，真实交易保持锁定。
+
+发布说明会给出填入实际提交 ID 的完整一键命令。命令结构如下（将 `<COMMIT>` 替换为已验证的完整提交 ID）：
 
 ```bash
-qp_src=$(mktemp -d) && gh repo clone Jk-z-Box/QuantPilot "$qp_src" && sudo bash "$qp_src/scripts/install.sh"
+bash -o pipefail -c 'curl --proto "=https" --tlsv1.2 -fsSL https://raw.githubusercontent.com/Jk-z-Box/QuantPilot/<COMMIT>/install.sh | bash -s -- --ref <COMMIT>'
 ```
 
-这条命令跟随默认分支。固定版本安装应在安装前执行 `git -C "$qp_src" checkout --detach <已验证的完整提交ID>`；发布交付说明会给出准确的提交和完整命令。
+需要 Linux/systemd、Python 3.11+、venv、curl、tar 和 sudo/root。`pipefail` 确保引导脚本下载失败不会被误判为成功。可在内层命令的 `--ref <COMMIT>` 后追加 `--port 8080 --username admin` 或域名/TLS 参数。
 
-私有仓库不能通过匿名 raw URL 下载，因此不提供无法访问的 `curl | bash` 命令。密码仍在安装时交互输入；不要把 GitHub Token 填进部署命令。
+从已安装的服务器更新时使用同一固定版本命令，并追加 `--upgrade`。不要直接跟随未经审查的可变分支安装。
+
+此次发布经用户明确授权，凭据仅在进程内存中临时用于 GitHub API，未写入项目或 Git 配置。后续维护建议使用 GitHub 安全连接、GitHub CLI 浏览器 OAuth 或 SSH。
 
 ### 启用 GitHub Actions
 
