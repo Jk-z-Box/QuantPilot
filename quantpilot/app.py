@@ -24,6 +24,8 @@ from .market import TIMEFRAMES, Market, MarketError, decimal
 from .runner import Runner
 from .store import Store, Vault
 from .strategy import analyze
+from .v2.api import install as install_v2
+from .v2.service import Workspace
 
 
 class StrictModel(BaseModel):
@@ -71,6 +73,7 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
     market = market or Market(settings, vault)
     engine = Engine(settings, store, market)
     runner = Runner(engine)
+    workspace = Workspace(store, vault, settings)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -83,13 +86,16 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
         try:
             if background:
                 runner.start()
+                workspace.start()
             yield
         finally:
+            workspace.stop()
             runner.stop()
             lock.close()
 
     app = FastAPI(title="QuantPilot", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.engine, app.state.store, app.state.vault, app.state.runner = engine, store, vault, runner
+    app.state.workspace = workspace
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=[urlsplit(settings.public_origin).hostname, "127.0.0.1", "localhost"])
 
     @app.middleware("http")
@@ -142,7 +148,7 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
 
     @app.get("/healthz")
     def health():
-        return {"status": "ok", "mode": "paper"}
+        return {"status": "ok", "version": "0.2.0", "mode": "paper-first"}
 
     @app.post("/api/login")
     def login(body: Login, request: Request, response: Response):
@@ -285,11 +291,17 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
         store.record("ai_settings", {"enabled": body.enabled, "model": body.model})
         return {"enabled": body.enabled, "model": body.model}
 
+    install_v2(app, workspace, session, mutation)
+
     static = Path(__file__).parent / "static"
     app.mount("/static", StaticFiles(directory=static), name="static")
 
     @app.get("/")
     def index():
+        return FileResponse(static / "workspace.html")
+
+    @app.get("/legacy")
+    def legacy():
         return FileResponse(static / "index.html")
 
     return app

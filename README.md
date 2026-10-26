@@ -1,29 +1,64 @@
-# QuantPilot
+# QuantPilot 0.2
 
-一个可本地运行、可部署到 Linux 的现货量化研究与模拟交易控制台。
+中文多账户永续合约研究与模拟交易工作台。先观察市场、查看评分依据，再用独立模拟资金验证。默认不发送真实订单。
 
-**版本 0.1.0 是模拟盘版本。没有真实订单发送通道。** Web、环境变量、配置文件和 AI 输出均不能启用实盘。账户查询使用只读交易所凭据；不要给予提币权限。
+## 打开后怎么用
 
-## 项目来源与范围
+1. **市场与机会**：默认 BTC、ETH、SOL、AVGO、SOXL，使用 Binance USDT 永续合约名称。点品种切换 K 线，右侧选择周期；“管理交易对”可换成 OKX / Gate，或添加其他已上市合约。
+2. **看机会说明**：周线、日线、4 小时、1 小时共同评估，显示方向、开仓区间、止损、两档止盈及比例、含费用的收益风险比、加减仓观察价和有效期。达到 80 分并通过全部阻断检查才有效，评分不是胜率。
+3. **账户与仓位**：默认独立的 10,000 USDT 模拟账户。可新增账户、重置资金、设置逐品种固定/最大名义金额及加仓次数比例，再手动启用自动交易。
+4. **数据与 AI**：公开行情、美联储、Deribit、Gate 清算统计无需密钥。CoinGlass / Finnhub / OpenAI 按需在网页加密保存密钥。AI 默认关闭。
+5. **交易记录**：查看开仓、加仓、分批退出、未确认订单和操作记录。顶部“暂停开仓”停用全部自动交易，已有仓位保护继续。重启后自动交易需要重新启用。
 
-开发日期：2026-10-26（Asia/Shanghai）。本次环境无法访问先前 ChatGPT 环境中的 `/mnt/data/quantpilot-starter.zip`、`README.md` 或 `CODEX_TASKS.md`，关联对话也未提供可下载附件。因此这是按照当前需求重新建立的独立实现，不是对初版代码的合并或审查结论。拿到原始压缩包后，应先比较再合并。
+旧版现货模拟账本保留在 `/legacy`，不迁移为合约资金，不与新账户混用；旧版说明见 [历史手册](docs/LEGACY-0.1.md)。
 
-目前包含：
+## 已实现的能力与边界
 
-- Binance、OKX、Bybit、Kraken、Coinbase 的 CCXT 现货行情适配与只读余额查询；具体交易对可用性由交易所决定。
-- 完成 K 线过滤、EMA20/50、Wilder RSI14、ATR14、量比和带有效期的策略信号。
-- 单策略自动模拟运行、手动限价 IOC 模拟下单、止盈止损轮询、手续费与滑点。
-- 持久化订单幂等、现金/仓位账本、风控、暂停开仓、审计和重启保护。
-- 中文响应式 Web 控制台，密码登录、会话撤销、CSRF、防暴力登录、加密凭据。
-- 可选 OpenAI Responses API 风险复核，结构化输出校验、限频、无交易工具权限。
-- Linux systemd 安装与更新脚本、`qp` / `quantpilot` 快捷菜单、备份、Cloudflare Origin Rules 配置生成。
-- 固定依赖及下载哈希、测试、静态检查、秘密扫描和 GitHub Actions 待启用模板。
+| 功能 | 本版行为 |
+|---|---|
+| 市场 | Binance / OKX / Gate 的已上市 USDT 线性永续，按交易所合约目录校验；不支持反向、交割或期权下单 |
+| 图表 | 5m / 15m / 1h / 4h / 1d / 1w，蜡烛、成交量、悬停详情、缩放；展示未收盘线，评分仅用完成线 |
+| 更新 | 报价及保护循环约 3 秒，网页约 5 秒，多周期评估约 30 秒；网络耗时会延长，属于轮询而非 WebSocket |
+| 技术评分 | EMA20/50、RSI14、MACD12/26/9、ATR14、波动率、量比、多周期趋势、费率及 OI |
+| 外部证据 | 来源、披露/查询时间、失效时间、覆盖范围和缺失状态；不把缺失证据按比例放大成满分 |
+| 模拟账户 | 独立账本、多空、保证金预留、费用滑点、部分退出、资金重置、持久化幂等 |
+| 仓位配置 | 固定金额不足风险额度即拒绝；最大金额动态评估且包含加仓，为计划加仓预留额度；比例基于初始名义金额 |
+| 交易所账户 | 隔离凭据、余额/仓位只读核对、逐账户同交易所品种授权；资金、已持仓、强平距离和未知订单检查 |
+| 执行组件 | 测试环境/实盘独立门槛；IOC 入场、确认成交量后放置原生只减仓止损及两档止盈；不确定结果锁定账户、不盲目重试 |
+| 动态保护 | 趋势反转/事件风险退出、机会失效一次性减半、分批止盈；AI 可受限减仓/退出/收紧止损及止盈，不能放宽风险 |
+| 系统 | 密码登录、会话/CSRF、加密凭据、审计、单进程、Linux 安装升级、CLI、Cloudflare 回源说明 |
 
-尚不包含：实盘执行、合约/杠杆/做空、交易所原生止损单、历史回测、多人权限系统、跨进程扩容。不能把模拟测试结果解释为实盘认证或收益证明。
+**本版没有完成交易所测试网及实盘认证。** 私有 API、不同账户模式和原生保护单必须逐交易所联调；本地替身测试不能证明交易所实盘可用。生产默认关闭 `QP_LIVE_EXECUTION` 和 `QP_DEMO_EXECUTION`，网页不能解除服务端门槛。详见 [执行验收](docs/ACCEPTANCE.md)。
+
+模拟账户的“模拟交易所”保存环境身份，使用所选监测品种的市场价格；账本使用统一费用/滑点/强平估算模型，不声称精确复制各交易所的撮合、手续费等级或保证金档位。没有历史回测、多人权限、跨进程扩容和全市场新闻覆盖。
+
+## 数据来源
+
+- **行情**：所选交易所自己的盘口、K 线、资金费率与 OI。行情不可达时显示缺失，不暗中切换交易所或合成价格。
+- **期权**：Deribit 最近到期期权 OI、交割窗口及按 OI 估算的最大痛点。最大痛点是统计估算，不是目标价；没有股票期权公开源时保持缺失。
+- **宏观**：美联储官方 FOMC 日历和公告；日历日期按通常 14:00 ET 转换，仅作风险窗口。Finnhub 连接可补充公司财报和新闻；不声称实时覆盖所有突发事件。
+- **清算**：默认 Gate 对应合约的公开历史清算统计，清楚标注单市场范围；CoinGlass 可提供聚合清算和热力图。热力图是供应商模型，不能当作实际成交或确定清算价。
+- **ETF**：公开来源不足时不编造。可人工导入已核验披露并保存链接/时间，也可配置 CoinGlass 获取已披露交易日净流量；它不是盘中即时资金流。权限和币种覆盖由供应商决定。
+- **AI**：可选 OpenAI Responses API。启用会发送公共指标、事件摘要、匿名化账户资金与持仓数据，并产生 API 费用；不发送密钥和账户名称。严格校验结构，评分上调最多 5 分且不超过数据覆盖度，下调最多 30 分，只能缩短时效、收紧保护，仍须通过确定性风控。
+
+默认五个名称不保证每个合约已上市、可在当前地区访问或已有 60 根周 K。新上市合约历史不足会阻止交易。公开数据不足以达到 80 分时，等待是正常行为；不会为“产生信号”而降低门槛。
+
+## 风险偏好
+
+| 参数 | 保守 | 平衡（默认） | 激进 |
+|---|---:|---:|---:|
+| 单笔止损风险预算 / 权益 | 0.3% | 0.6% | 1% |
+| 总名义敞口 / 权益 | 30% | 60% | 90% |
+| 最大杠杆 | 1x | 2x | 3x |
+| 信号最长有效期 | 120 秒 | 180 秒 | 240 秒 |
+| 最低含费用收益风险比 | 2.0 | 1.8 | 1.6 |
+| 自动加仓次数上限 | 1 | 2 | 3 |
+
+每组相关资产敞口最多占组合敞口限额 75%；当前按加密/股票 ETF 分组保守限制，尚不是滚动相关系数模型。组合止损风险最多 3 倍单笔预算，UTC 日损失达到 5 倍单笔预算阻止新增风险。默认两档止盈为 1.5R / 3R，各 50%。默认模拟手续费每边 5 bps、滑点 2 bps；资金费率按 8 小时近似，强平价为简化逐仓估算。跳空和停机仍可能超过计划损失。
 
 ## 本地启动
 
-需要 Python 3.11–3.13，Linux 或 macOS。
+需要 Python 3.11–3.13。
 
 ```bash
 python3 -m venv .venv
@@ -34,99 +69,33 @@ qp init --username admin --port 8080
 qp serve
 ```
 
-初始化会交互式要求密码（至少 12 位），不会将密码放入命令行、日志或代码。打开 `http://127.0.0.1:8080`，使用初始化账号登录。默认尝试公共交易所行情。
+打开 `http://127.0.0.1:8080`。账号/端口可自定义，密码至少 12 位、在终端隐藏输入。公共行情不需要交易所密钥。离线演示必须单独设置 `QP_CONFIG` 路径并在初始化时明确加 `--demo`；界面始终标记合成数据。
 
-离线演示需要单独的数据目录，并显式设置 `--demo`：
-
-```bash
-export QP_CONFIG="$PWD/data-demo/config.json"
-qp init --username demo --port 8081 --demo
-qp serve
-```
-
-演示界面持续显示合成数据标记。交易所失败不会自动切换为演示数据。演示与公共行情不要共享一个账本。
-
-## 使用流程
-
-1. 在总览选择交易所、交易对和周期，检查盘口时间、图表和信号有效期。
-2. 先用模拟订单验证：买单必须输入数量、限价、止损价和止盈价。限价不满足立即成交条件时直接拒单，不保留挂单。
-3. 在策略页设置单次预算、止损/止盈比例并启用。策略使用完成 K 线；同一策略市场已有仓位时不会加仓。
-4. 在连接页按需保存只读交易所凭据。公共行情不需要密钥。余额查询只返回余额，不导入模拟账本。
-5. 如需 AI，保存 OpenAI Key，填写账号可用的模型 ID 并启用。仅点击“AI 风险复核”才产生请求及可能的 API 费用。AI 不会下单或修改配置。
-6. 查看订单与审计。暂停开仓按钮同时停用策略，仍允许减仓和保护退出。解除暂停不会自动恢复策略。
-
-默认观察列表为 BTC、ETH、SOL、BNB、XRP 对 USDT；这是本版可配置默认值，不代表已恢复原项目的五资产清单。Kraken/Coinbase 等交易所可能不提供列表内所有交易对，会明确拒绝不支持的市场。
-
-## 风控默认值
-
-| 项目 | 默认值 |
-|---|---:|
-| 初始虚拟资金 | 10,000 USDT |
-| 单笔模拟订单上限 | 500 USDT |
-| 总持仓敞口上限 | 3,000 USDT |
-| 单市场仓位上限 | 1,500 USDT |
-| 单仓预计止损损失上限 | 50 USDT |
-| 每日权益损失限额 | 300 USDT |
-| 模拟手续费 / 滑点 | 10 / 5 bps |
-| 允许最大报价年龄 / 价差 | 30 秒 / 30 bps |
-| 订单有效期 | 前端 30 秒；服务端最多 60 秒 |
-| 模拟保护轮询 | 15 秒，网络耗时可能延长 |
-
-限额在配置文件中保存，修改后重启服务。每日基准按 UTC 日期切换，在当天首次有效估值时建立，不是追溯计算的零点价格。估值使用买一价。持仓、手续费和盈亏均为模拟；所有交易所共用一个虚拟 USDT 资金池，不模拟跨所转账。
-
-止损风险预算是按止损价估算的损失，跳空、滑点和停机可能导致实际模拟损失超过该值。保护卖出可超过开仓单笔限额，以免大幅上涨后的仓位无法退出。其他手动减仓仍受单笔限额约束。
-
-## Linux 部署与管理
-
-完整说明见 [部署手册](docs/DEPLOYMENT.md)。在下载并审阅代码后，一条命令开始交互式安装：
-
-```bash
-sudo bash scripts/install.sh
-```
-
-或指定端口与账号，密码仍交互输入：
+## Linux 与域名
 
 ```bash
 sudo bash scripts/install.sh --port 8080 --username admin
+sudo bash scripts/install.sh --upgrade
+sudo qp                  # 快捷菜单
+sudo qp status           # 含新工作区及账户状态
+sudo qp kill on          # 同时暂停新旧工作区开仓
+sudo qp kill off         # 解除暂停；不会重新开启自动交易
+sudo qp password         # 更新密码并撤销会话
+sudo qp backup           # 数据库一致性备份
+sudo qp doctor
 ```
 
-安装后使用：
+`qp start / stop / restart / logs` 管理服务。多账户密钥在网页设置，旧 `qp credential` 仅管理旧版连接。升级保留配置、密钥与旧账本。
 
-```bash
-sudo qp                 # 管理菜单
-sudo qp status          # 状态
-sudo qp start           # 启动
-sudo qp stop            # 停止
-sudo qp restart         # 重启；自动策略回到停用状态
-sudo qp logs            # 最近 100 行日志
-sudo qp kill on         # 暂停开仓
-sudo qp kill off        # 允许开仓，策略仍需手动启用
-sudo qp password        # 修改密码，立即撤销旧会话
-sudo qp backup          # 数据库一致性备份，包含主密钥
-sudo qp doctor          # 配置、密钥和数据库检查
-```
+Cloudflare 路径必须为浏览器 HTTPS → Cloudflare → 回源端口的 **HTTPS** 服务 → 本机应用。Origin Rules 改端口不会转换 HTTP/HTTPS。部署、备份和一键命令结构见 [部署手册](docs/DEPLOYMENT.md)。
 
-## 测试
+## 验证与维护
 
 ```bash
 python -m pip install --require-hashes -r requirements.lock -r requirements-dev.lock
 bash scripts/check.sh
-python -m pip_audit -r requirements.lock --disable-pip
 ```
 
-测试不需要交易所或 OpenAI 密钥，不发送真实订单。覆盖范围与实际验收结果见 [测试报告](docs/TEST_REPORT.md)。本机没有 Linux/systemd 环境，不能将脚本检查当作服务器部署验收。
+测试结果、实际外部探测和未验证项见 [验收记录](docs/TEST_REPORT.md)，后续工作见 [交接任务](CODEX_TASKS.md)。当前项目为按需求独立建立的实现；最早的 `/mnt/data/quantpilot-starter.zip` 在此环境不可访问，未声称导入或审查过该压缩包。
 
-## GitHub 与密钥
-
-聊天里曾出现的 GitHub Token 必须撤销。项目不使用该 Token。后续授权使用 GitHub 安全连接或用户自行配置的 OAuth/SSH。此次发布经用户明确授权，凭据仅临时在进程内存中用于 GitHub API；未写入文件、Git 配置、仓库 URL 或输出。不要把 Token 放进仓库 URL、命令参数或安装脚本。
-
-仓库地址：<https://github.com/Jk-z-Box/QuantPilot>（公开）。安装命令和 CI 启用步骤见部署手册；仓库发布不代表已经部署到 Linux 服务器。
-
-## 设计与资料
-
-- [架构与数据流程](docs/ARCHITECTURE.md)
-- [安全边界与实盘验收门槛](docs/SECURITY.md)
-- [剩余任务与交接记录](CODEX_TASKS.md)
-- CCXT 的统一行情接口及限速行为参考 [官方 Manual](https://docs.ccxt.com/#/README)。实际市场、精度和交易限制从交易所元数据读取。
-- OpenAI 接口遵循 [Structured Outputs 官方文档](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses)，使用 Responses API 的 `text.format`，并再次在本地校验。
-- Cloudflare 的端口覆盖方式见 [Origin Rules 官方文档](https://developers.cloudflare.com/rules/origin-rules/examples/change-port/)。
+官方接口依据：[Gate](https://www.gate.com/docs/developers/apiv4/en/futures/)、[OKX](https://www.okx.com/docs-v5/en/)、[Binance](https://developers.binance.com/docs/derivatives/usds-margined-futures/general-info)、[Deribit](https://docs.deribit.com/api-reference/market-data/public-get_book_summary_by_currency)、[美联储](https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm)、[CoinGlass](https://docs.coinglass.com/reference/etf-flows-history)、[OpenAI](https://developers.openai.com/api/docs/guides/structured-outputs)。

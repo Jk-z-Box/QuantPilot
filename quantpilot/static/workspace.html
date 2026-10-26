@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>QuantPilot · 市场与交易工作台</title>
+    <link rel="stylesheet" href="/static/workspace.css" />
+    <script src="/static/workspace.js" defer></script>
+  </head>
+  <body>
+    <section id="login" class="login-wrap">
+      <div class="login-story">
+        <a class="brand"><span class="brand-mark">Q</span> QuantPilot</a>
+        <div>
+          <p class="eyebrow">YOUR MARKET, IN FOCUS</p>
+          <h1>看清机会，<br />掌握每一步。</h1>
+          <p>
+            从市场观察，到策略验证。<br />每一个信号都有依据，每一次执行都有边界。
+          </p>
+          <div class="story-tags">
+            <span>多周期趋势</span><span>独立账户</span><span>动态风控</span>
+          </div>
+        </div>
+        <small>QUANTPILOT / 02</small>
+      </div>
+      <form id="loginForm" class="login-card">
+        <p class="eyebrow">WELCOME BACK</p>
+        <h2>进入你的交易工作台</h2>
+        <p class="muted">使用安装时设置的管理员账号登录。</p>
+        <label
+          >用户名<input
+            name="username"
+            autocomplete="username"
+            required /></label
+        ><label
+          >密码<input
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            required /></label
+        ><button class="primary">登录工作台 <span>↗</span></button>
+        <p id="loginError" class="negative" role="alert"></p>
+        <p class="fine">默认使用模拟账户。交易所账户需要单独配置与授权。</p>
+      </form>
+    </section>
+    <div id="app" class="app" hidden>
+      <aside class="sidebar">
+        <a href="/" class="brand"
+          ><span class="brand-mark">Q</span> QuantPilot</a
+        >
+        <div class="workspace-label">
+          <span class="dot"></span>
+          <div>我的交易工作区<small>PERPETUAL / 多账户</small></div>
+        </div>
+        <p class="nav-caption">工作台</p>
+        <nav>
+          <button class="nav active" data-page="market">
+            <span>◫</span>市场与机会</button
+          ><button class="nav" data-page="accounts">
+            <span>▣</span>账户与仓位</button
+          ><button class="nav" data-page="history">
+            <span>≡</span>交易记录</button
+          ><button class="nav" data-page="settings">
+            <span>⚙</span>数据与 AI
+          </button>
+        </nav>
+        <div class="sidebar-bottom">
+          <div class="guide">
+            <span>◈</span><b>先理解，再执行</b>
+            <p>评分是规则评估，不是盈利概率。你始终可以暂停新的交易。</p>
+            <button id="help" class="text-button">查看使用指南 ↗</button>
+          </div>
+          <a href="/legacy" class="legacy">旧版模拟账本 ↗</a
+          ><button id="logout" class="text-button">退出登录</button
+          ><small>QUANTPILOT 0.2</small>
+        </div>
+      </aside>
+      <div class="main">
+        <header class="topbar">
+          <div class="breadcrumb">
+            工作台 <span>/</span> <b id="breadcrumb">市场与机会</b>
+          </div>
+          <div class="top-actions">
+            <span id="connection" class="connection"
+              ><i class="dot"></i> 正在连接</span
+            ><span class="avatar">Q</span>
+          </div>
+        </header>
+        <main class="content">
+          <div id="demoBanner" class="banner warning" hidden>
+            当前为演示环境：价格和 K 线为合成数据，不能作为市场判断依据。
+          </div>
+          <div id="haltBanner" class="banner warning" hidden>
+            新开仓已暂停，账户自动交易已停用。已有模拟仓位仍检查止盈止损。
+          </div>
+          <div id="errorBanner" class="banner error" role="alert" hidden></div>
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">OBSERVE. EVALUATE. ACT.</p>
+              <h1 id="pageTitle">市场与机会</h1>
+              <p id="pageDescription" class="muted">
+                让数据说清楚，什么时候值得行动。
+              </p>
+            </div>
+            <div class="heading-actions">
+              <label class="inline-label"
+                >风险偏好<select id="profile" aria-label="风险偏好">
+                  <option value="conservative">保守</option>
+                  <option value="balanced">平衡</option>
+                  <option value="aggressive">激进</option>
+                </select></label
+              ><button id="halt" class="danger-outline">Ⅱ 暂停开仓</button>
+            </div>
+          </div>
+          <section data-panel="market">
+            <div class="section-line">
+              <div>
+                <b>我的监测列表</b
+                ><span class="muted small"> USDT 永续合约</span>
+              </div>
+              <button id="editWatch" class="text-button">管理交易对 ＋</button>
+            </div>
+            <div id="watchTiles" class="watch-tiles"></div>
+            <div class="market-grid">
+              <article class="card chart-card">
+                <div class="card-head">
+                  <div>
+                    <p class="eyebrow" id="chartVenue">MARKET</p>
+                    <h2 id="chartTitle">选择交易对</h2>
+                  </div>
+                  <div class="chart-actions">
+                    <select id="timeframe" aria-label="K 线周期">
+                      <option value="5m">5 分钟</option>
+                      <option value="15m">15 分钟</option>
+                      <option value="1h" selected>1 小时</option>
+                      <option value="4h">4 小时</option>
+                      <option value="1d">日线</option>
+                      <option value="1w">周线</option></select
+                    ><button
+                      id="chartReset"
+                      class="icon-button"
+                      title="重置图表缩放"
+                      aria-label="重置缩放"
+                    >
+                      ⤢
+                    </button>
+                  </div>
+                </div>
+                <div class="chart-quote">
+                  <strong id="chartPrice">—</strong
+                  ><span id="chartMeta" class="muted small">等待报价</span>
+                </div>
+                <div id="chartContainer" class="chart-container">
+                  <svg
+                    id="candles"
+                    viewBox="0 0 960 380"
+                    role="img"
+                    aria-label="价格蜡烛图和成交量"
+                  ></svg>
+                  <div id="chartEmpty" class="chart-empty">正在读取 K 线…</div>
+                  <div id="chartTooltip" class="chart-tooltip" hidden></div>
+                </div>
+                <div class="chart-foot">
+                  <span
+                    ><i class="dot"></i>
+                    <span id="chartFresh">等待数据</span></span
+                  ><span>滚轮缩放 · 双击恢复 · 最新一根可能未收盘</span>
+                </div>
+                <div id="trendRow" class="trend-row"></div>
+              </article>
+              <article class="card opportunity-card">
+                <div class="card-head">
+                  <div>
+                    <p class="eyebrow">OPPORTUNITY</p>
+                    <h2>当前交易机会</h2>
+                  </div>
+                  <span id="signalBadge" class="badge">评估中</span>
+                </div>
+                <div class="score-line">
+                  <div><strong id="score">—</strong><span>/ 100</span></div>
+                  <span id="scoreLabel" class="muted">80 分起生效</span>
+                </div>
+                <div class="score-track">
+                  <span id="scoreBar"></span><i></i>
+                </div>
+                <div id="signalSummary" class="signal-summary">
+                  正在分析周线、日线、4 小时和 1 小时趋势。
+                </div>
+                <div id="tradePlan" class="trade-plan"></div>
+                <div id="signalReasons" class="signal-reasons"></div>
+                <div class="op-footer">
+                  <span id="expiry" class="small muted">等待评估</span
+                  ><button id="reviewAI" class="text-button">✧ AI 复核</button>
+                </div>
+              </article>
+            </div>
+            <div class="detail-grid">
+              <article class="card">
+                <div class="card-head">
+                  <div>
+                    <p class="eyebrow">EVIDENCE</p>
+                    <h2>这次判断的依据</h2>
+                  </div>
+                  <span id="coverage" class="badge">数据完整度 —</span>
+                </div>
+                <div id="scoreDetails" class="score-details"></div>
+              </article>
+              <article class="card">
+                <div class="card-head">
+                  <div>
+                    <p class="eyebrow">CONTEXT & RISK</p>
+                    <h2>市场背景与事件</h2>
+                  </div>
+                  <button class="text-button" data-go="settings">
+                    配置来源 ↗
+                  </button>
+                </div>
+                <div id="evidenceList" class="evidence-list"></div>
+              </article>
+            </div>
+          </section>
+          <section data-panel="accounts" hidden>
+            <div class="section-line">
+              <p class="muted">
+                模拟资金与真实账户分开管理。账户授权只对所选交易对生效。
+              </p>
+              <button id="addAccount" class="primary">＋ 添加账户</button>
+            </div>
+            <div id="accountCards" class="account-cards"></div>
+            <article class="card positions-card">
+              <div class="card-head">
+                <h2>当前仓位</h2>
+                <span class="muted small"
+                  >模拟强平价为估算，交易所强平价以账户返回值为准</span
+                >
+              </div>
+              <div class="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>账户 / 市场</th>
+                      <th>方向 / 数量</th>
+                      <th>开仓均价</th>
+                      <th>浮动盈亏</th>
+                      <th>止损 / 强平价</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="positions"></tbody>
+                </table>
+              </div>
+            </article>
+          </section>
+          <section data-panel="history" hidden>
+            <article class="card">
+              <div class="card-head">
+                <h2>交易与执行记录</h2>
+                <span class="muted small">最近 100 条 · 含未确认状态</span>
+              </div>
+              <div class="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>时间</th>
+                      <th>账户</th>
+                      <th>操作</th>
+                      <th>市场</th>
+                      <th>数量 / 价格</th>
+                      <th>结果</th>
+                    </tr>
+                  </thead>
+                  <tbody id="orderRows"></tbody>
+                </table>
+              </div>
+            </article>
+            <article class="card audit-card">
+              <div class="card-head">
+                <h2>操作记录</h2>
+                <button id="refreshAudit" class="text-button">刷新</button>
+              </div>
+              <div id="auditRows"></div>
+            </article>
+          </section>
+          <section data-panel="settings" hidden>
+            <div class="detail-grid">
+              <article class="card">
+                <div class="card-head">
+                  <div>
+                    <p class="eyebrow">AI COPILOT</p>
+                    <h2>OpenAI 风险复核</h2>
+                  </div>
+                  <span id="aiStatus" class="badge">未启用</span>
+                </div>
+                <p class="muted">
+                  AI
+                  可以修正评分、缩短有效期，并提出仓位干预。订单仍须通过账户权限和风控检查。启用后会向
+                  OpenAI 发送行情、事件摘要及匿名化账户资金与持仓数据。
+                </p>
+                <form id="aiForm">
+                  <label
+                    >模型 ID<input
+                      name="model"
+                      placeholder="填写你的 API 账号可用模型"
+                      maxlength="100" /></label
+                  ><label
+                    >自动复核间隔<select name="interval">
+                      <option value="60">每分钟</option>
+                      <option value="300">每 5 分钟</option>
+                      <option value="900">每 15 分钟</option>
+                    </select></label
+                  ><label class="check"
+                    ><input name="enabled" type="checkbox" />启用自动 AI
+                    复核（会产生 API 费用）</label
+                  ><label class="check"
+                    ><input
+                      name="intervene"
+                      type="checkbox"
+                    />允许受风控约束的仓位干预</label
+                  ><button class="primary">保存 AI 设置</button>
+                </form>
+                <form class="key-form" data-provider="openai">
+                  <label
+                    >OpenAI API Key<input
+                      type="password"
+                      name="key"
+                      autocomplete="off"
+                      placeholder="仅在需要新增或更换时填写"
+                      required /></label
+                  ><button class="secondary">加密保存密钥</button
+                  ><span id="openaiSaved" class="small muted"></span>
+                </form>
+              </article>
+              <article class="card">
+                <div class="card-head">
+                  <div>
+                    <p class="eyebrow">DATA CONNECTIONS</p>
+                    <h2>数据来源</h2>
+                  </div>
+                  <span class="badge good">公开数据优先</span>
+                </div>
+                <div class="source-row">
+                  <b>交易所公共行情</b><span class="badge good">无需密钥</span>
+                  <p>币安 / OKX / Gate 永续合约、K 线、资金费率与持仓量。</p>
+                </div>
+                <div class="source-row">
+                  <b>Deribit · 美联储</b
+                  ><span class="badge good">无需密钥</span>
+                  <p>
+                    期权持仓、交割和最大痛点估算；FOMC 日历与官方公告；Gate
+                    单市场已发生清算量。
+                  </p>
+                </div>
+                <form class="key-form" data-provider="coinglass">
+                  <b>CoinGlass</b>
+                  <p class="small muted">
+                    已披露 ETF 资金流、清算量与热力图，具体权限取决于你的套餐。
+                  </p>
+                  <label
+                    >API Key<input
+                      type="password"
+                      name="key"
+                      autocomplete="off"
+                      required /></label
+                  ><button class="secondary">保存数据密钥</button
+                  ><span id="coinglassSaved" class="small muted"></span>
+                </form>
+                <form class="key-form" data-provider="finnhub">
+                  <b>Finnhub</b>
+                  <p class="small muted">
+                    公司新闻与财报日历。没有权限时显示缺失，不填入推测数据。
+                  </p>
+                  <label
+                    >API Key<input
+                      type="password"
+                      name="key"
+                      autocomplete="off"
+                      required /></label
+                  ><button class="secondary">保存数据密钥</button
+                  ><span id="finnhubSaved" class="small muted"></span>
+                </form>
+              </article>
+            </div>
+            <article class="card">
+              <details>
+                <summary>补充已核验的披露 / 风险事件</summary>
+                <p class="muted">
+                  用于暂未接入的数据来源。保留来源链接与发布时间，显示为人工核验导入，到期自动失效。
+                </p>
+                <form id="evidenceForm" class="form-grid">
+                  <label>交易对<select name="instrument"></select></label
+                  ><label
+                    >数据类别<select name="category">
+                      <option value="etf">实际披露资金流</option>
+                      <option value="options">期权 / 交割</option>
+                      <option value="liquidation">清算数据</option>
+                      <option value="macro">宏观 / 财报 / 突发新闻</option>
+                    </select></label
+                  ><label
+                    >来源名称<input
+                      name="source"
+                      required
+                      maxlength="100" /></label
+                  ><label
+                    >原始来源 HTTPS 链接<input
+                      name="url"
+                      type="url"
+                      required /></label
+                  ><label
+                    >发布时间<input
+                      name="published"
+                      type="datetime-local"
+                      required /></label
+                  ><label
+                    >有效截止时间<input
+                      name="expires"
+                      type="datetime-local"
+                      required /></label
+                  ><label
+                    >影响判断<select name="bias">
+                      <option value="neutral">中性 / 尚无方向结论</option>
+                      <option value="bullish">偏多</option>
+                      <option value="bearish">偏空</option>
+                      <option value="risk">重大风险，阻止开仓</option>
+                    </select></label
+                  ><label
+                    >计划事件时间（可选）<input
+                      name="event"
+                      type="datetime-local" /></label
+                  ><label
+                    >已披露数值（可选）<input
+                      name="value"
+                      type="number"
+                      step="any"
+                      value="0" /></label
+                  ><label>说明<input name="note" maxlength="1000" /></label
+                  ><button class="primary">保存已核验信息</button>
+                </form>
+              </details>
+            </article>
+          </section>
+          <footer>
+            <span>数据与机会持续刷新 · 失效信号不执行</span
+            ><span>QUANTPILOT / MISSION CONTROL</span>
+          </footer>
+        </main>
+      </div>
+    </div>
+    <dialog id="dialog">
+      <div class="dialog-head">
+        <h2 id="dialogTitle"></h2>
+        <button id="closeDialog" class="icon-button" aria-label="关闭弹窗">
+          ×
+        </button>
+      </div>
+      <div id="dialogBody"></div>
+    </dialog>
+    <div id="toast" role="status" hidden></div>
+  </body>
+</html>

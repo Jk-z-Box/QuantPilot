@@ -15,7 +15,7 @@ sudo apt-get install -y python3 python3-venv python3-pip ca-certificates git
 
 ## 从交付压缩包安装
 
-解压 `QuantPilot-0.1.0.zip`，进入 `QuantPilot` 目录，运行：
+解压 `QuantPilot-0.2.0.zip`，进入 `QuantPilot` 目录，运行：
 
 ```bash
 sudo bash scripts/install.sh --port 8080 --username admin
@@ -86,7 +86,7 @@ sudo bash scripts/install.sh --upgrade
 
 更新保留配置与账本，先生成一致性备份，安装到新目录，再原子切换版本指针并重启。若 systemd/TCP 就绪检查失败，会恢复原版本指针。脚本就绪检查不是外部 HTTPS、Cloudflare 或业务验收；仍需执行登录及模拟下单验收。
 
-本版数据库 schema 为 1，无破坏性迁移。未来引入不兼容迁移前必须另行设计数据回滚，不能只切换代码。历史版本不会自动删除。
+0.2 保留旧表及 schema 标记，新增 v2 命名空间和订单表，无破坏性迁移。回滚旧代码后新账户数据保留，但旧界面不会展示。未来引入不兼容迁移前必须另行设计数据回滚，不能只切换代码。历史版本不会自动删除。
 
 ## 备份和恢复
 
@@ -110,8 +110,8 @@ bash -o pipefail -c 'curl --proto "=https" --tlsv1.2 -fsSL https://raw.githubuse
 
 从已安装的服务器更新时使用同一固定版本命令，并追加 `--upgrade`。不要直接跟随未经审查的可变分支安装。
 
-此次发布经用户明确授权，凭据仅在进程内存中临时用于 GitHub API，未写入项目或 Git 配置。后续维护建议使用 GitHub 安全连接、GitHub CLI 浏览器 OAuth 或 SSH。
+公开仓库安装无需 Token。发布优先使用 GitHub 安全连接；任何临时发布凭据只能按明确授权在进程内存中使用，不写入部署命令。
 
 ### 启用 GitHub Actions
 
-本次发布授权不含 workflow 权限，所以 CI 保存在 `ci/github-actions.yml` 作为模板。通过具备相应权限的 OAuth、GitHub 连接或其他正常授权，将该文件移动至 `.github/workflows/ci.yml` 并提交后，才会触发 CI。当前没有远程 CI 通过的结论。
+CI 保存在 `ci/github-actions.yml` 作为模板。通过具备相应权限的 OAuth、GitHub 连接或其他正常授权，将该文件移动至 `.github/workflows/ci.yml` 并提交后，才会触发 CI。是否通过以该提交的 Actions 实际结果为准。

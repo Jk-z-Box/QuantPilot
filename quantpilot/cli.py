@@ -132,13 +132,30 @@ def main(argv=None):
                         workers=1, proxy_headers=False, access_log=False, log_level="warning",
                         ssl_certfile=settings.tls_cert, ssl_keyfile=settings.tls_key)
         elif args.command == "status":
+            with store.connect() as db:
+                v2 = {r["key"]: json.loads(r["value"]) for r in db.execute("SELECT key,value FROM kv WHERE key IN ('v2_preferences','v2_accounts')")}
             print(json.dumps({"mode": "paper", "live_locked": True, "market_mode": settings.market_mode,
                 "origin": settings.public_origin, "kill_switch": store.get("kill"),
-                "strategy": store.get("strategy")}, indent=2))
+                "strategy": store.get("strategy"),
+                "workspace": v2.get("v2_preferences"),
+                "accounts": [{"id": a["id"], "name": a["name"], "kind": a["kind"], "auto": a["auto"]} for a in (v2.get("v2_accounts") or {}).values()],
+                "live_execution_switch": os.getenv("QP_LIVE_EXECUTION") == "1"}, indent=2))
             if shutil.which("systemctl"):
                 return service("status")
         elif args.command == "kill":
             store.set_kill(args.state == "on")
+            with store.transaction() as db:
+                row = db.execute("SELECT value FROM kv WHERE key='v2_preferences'").fetchone()
+                if row:
+                    prefs = json.loads(row[0])
+                    prefs["halted"] = args.state == "on"
+                    store.write(db, "v2_preferences", prefs)
+                    if args.state == "on":
+                        accounts = store.read(db, "v2_accounts")
+                        for account in accounts.values():
+                            account["auto"] = False
+                        store.write(db, "v2_accounts", accounts)
+                    store.audit(db, "v2_cli_halt", {"halted": prefs["halted"]})
             print("开仓暂停。减仓和保护退出仍可执行。" if args.state == "on" else "开仓限制已解除，策略仍需手动启用。")
         elif args.command == "password":
             password = getpass.getpass("新密码（至少 12 位）: ")
