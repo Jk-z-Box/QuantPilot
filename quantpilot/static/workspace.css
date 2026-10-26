@@ -1140,7 +1140,7 @@ details summary {
   .watch-tile {
     padding: 14px 12px;
   }
-  .chart-foot span:last-child {
+  .chart-foot > span:last-child {
     display: none;
   }
   .trend-cell {
@@ -1168,9 +1168,12 @@ details summary {
     margin-top: 45px;
   }
   .nav {
-    font-size: 0;
-    padding: 13px;
+    font-size: 9px;
+    padding: 10px 1px;
     justify-content: center;
+    flex-direction: column;
+    gap: 5px;
+    white-space: nowrap;
   }
   .nav > span {
     font-size: 23px;
@@ -1384,4 +1387,11 @@ details summary {
   .login-card h2 {
     font-size: 23px;
   }
+}
+
+.liquidation-map svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
 }

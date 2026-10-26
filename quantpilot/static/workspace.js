@@ -925,3 +925,18 @@ action(async () => {
     $("app").hidden = true;
   }
 });
+
+$("accountMenu").onclick = () => {
+  modal(
+    "工作区菜单",
+    `<div class="notice-box"><button id="menuHelp" class="text-button">查看使用指南</button></div><div class="notice-box"><a href="/legacy">打开旧版模拟账本</a></div><div class="notice-box"><button id="menuLogout" class="danger-outline">退出登录</button></div>`,
+  );
+  $("menuHelp").onclick = () => {
+    $("dialog").close();
+    $("help").click();
+  };
+  $("menuLogout").onclick = () => {
+    $("dialog").close();
+    $("logout").click();
+  };
+};
