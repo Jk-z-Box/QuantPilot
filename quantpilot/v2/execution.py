@@ -11,6 +11,7 @@ import ccxt
 from ..market import decimal as D
 from .accounts import ledger, size_order
 from .limits import contract_limits
+from .models import policy_matches
 
 
 class ExchangeBroker:
@@ -76,7 +77,7 @@ class ExchangeBroker:
                 "timeout_no_duplicate",
             )
             ready = (
-                cert["version"] == "0.2.1"
+                cert["version"] == "0.2.2"
                 and cert["exchange"] == account["exchange"]
                 and cert["credential_fingerprint"] == fingerprint
                 and all(cert["checks"].get(k) is True for k in required)
@@ -190,7 +191,10 @@ class ExchangeBroker:
                 trigger = D(existing["entry"]) + (D(existing["entry"]) - D(existing["stop"])) * D(".75")
                 if (D(quotes[key]["mid"]) - trigger) * sign < 0:
                     raise ValueError("未到加仓观察价")
-            sizing = size_order(account, book, opportunity, quotes, instruments, profile, time.time(), adding)
+            min_score = self.store.get("v2_preferences")["min_score"]
+            sizing = size_order(
+                account, book, opportunity, quotes, instruments, profile, time.time(), adding, min_score
+            )
             client.load_markets()
             market = client.market(item["symbol"])
             if not market.get("linear") or not market.get("swap") or market.get("settle") != "USDT":
@@ -230,6 +234,8 @@ class ExchangeBroker:
                     or not current["auto"]
                     or self.store.read(db, "v2_preferences")["halted"]
                     or self.store.read(db, "v2_preferences")["profile"] != profile
+                    or self.store.read(db, "v2_preferences")["min_score"] != min_score
+                    or not policy_matches(opportunity, self.store.read(db, "v2_preferences"))
                 ):
                     raise ValueError("账户已停止或配置已变化")
                 if db.execute("SELECT 1 FROM v2_orders WHERE id=?", (identity,)).fetchone():

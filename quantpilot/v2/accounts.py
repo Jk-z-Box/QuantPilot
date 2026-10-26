@@ -6,7 +6,7 @@ import json
 import time
 
 from ..market import decimal as D
-from .models import PROFILES
+from .models import PROFILES, policy_matches
 
 FEE = D(".0005")
 SLIP = D(".0002")
@@ -68,10 +68,12 @@ def valuation(book, quotes, now):
     }
 
 
-def size_order(account, book, opportunity, quotes, instruments, profile, now, adding=False):
+def size_order(account, book, opportunity, quotes, instruments, profile, now, adding=False, min_score=80):
+    if opportunity.get("min_score", 80) != min_score:
+        raise ValueError("有效分数已变更，等待重新评估")
     if (
         not opportunity.get("valid")
-        or opportunity.get("score", 0) < 80
+        or opportunity.get("score", 0) < min_score
         or opportunity.get("expires_at", 0) <= now
     ):
         raise ValueError("交易机会无效或已过期")
@@ -148,7 +150,12 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
     if sizing["mode"] == "maximum" and ratios:
         target /= 1 + sum(map(D, ratios))
     if adding:
-        if not old or old["adds"] >= add_count or old["tp_done"] or opportunity["score"] < 85:
+        if (
+            not old
+            or old["adds"] >= add_count
+            or old["tp_done"]
+            or opportunity["score"] < min(100, min_score + 5)
+        ):
             raise ValueError("未满足加仓条件")
         if not old.get("initial_qty"):
             raise ValueError("旧仓位缺少初始币数量，不允许自动加仓")
@@ -203,6 +210,8 @@ class PaperBroker:
             accounts = self.store.read(db, "v2_accounts")
             current = accounts.get(aid)
             prefs = self.store.read(db, "v2_preferences")
+            if not policy_matches(opportunity, prefs):
+                raise ValueError("机会的风险或 AI 配置已变更，等待重新评估")
             if current != account or not current["auto"] or prefs["halted"] or prefs["profile"] != profile:
                 raise ValueError("账户已停用或配置已变更")
             books = self.store.read(db, "v2_ledgers")
@@ -214,7 +223,9 @@ class PaperBroker:
             ).hexdigest()
             if db.execute("SELECT 1 FROM v2_orders WHERE id=?", (identity,)).fetchone():
                 return {"status": "duplicate"}
-            sizing = size_order(account, book, opportunity, quotes, instruments, profile, now, adding)
+            sizing = size_order(
+                account, book, opportunity, quotes, instruments, profile, now, adding, prefs["min_score"]
+            )
             qty, price = sizing["qty"], sizing["price"]
             fee = qty * price * FEE
             book["cash"] = str(D(book["cash"]) - fee)

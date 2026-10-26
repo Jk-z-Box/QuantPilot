@@ -131,6 +131,8 @@ def install(app, workspace, session, mutation):
             {"apiKey": body.api_key.get_secret_value()},
         )
         workspace.feeds.cache.clear()
+        if provider == "openai":
+            workspace.research.invalidate()
         return {"saved": True}
 
     @app.delete("/api/v2/keys/{provider}", dependencies=[Depends(mutation)])
@@ -165,3 +167,7 @@ def install(app, workspace, session, mutation):
     @app.post("/api/v2/ai/review", dependencies=[Depends(mutation)])
     def ai_review():
         return safe(workspace.review_ai)
+
+    @app.post("/api/v2/ai/data", dependencies=[Depends(mutation)])
+    def ai_data():
+        return safe(workspace.research.request_now)

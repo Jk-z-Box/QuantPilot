@@ -77,6 +77,7 @@ def review(preferences, vault, opportunities, transport=None, risk=None):
                 "instrument_id",
                 "direction",
                 "score",
+                "min_score",
                 "coverage",
                 "indicators",
                 "evidence",
@@ -133,7 +134,9 @@ def apply_revision(op, revision, now, intervene):
     result = {**op, "ai": {**revision, "checked_at": now, "intervention_enabled": intervene}}
     result["score"] = max(0, min(op["coverage"], 100, op["score"] + revision["score_delta"]))
     result["expires_at"] = min(op["expires_at"], now + revision["ttl"])
-    result["valid"] = result["score"] >= 80 and not op["blockers"] and result["expires_at"] > now
+    result["valid"] = (
+        result["score"] >= op.get("min_score", 80) and not op["blockers"] and result["expires_at"] > now
+    )
     if revision["action"] in ("close", "reduce"):
         result["valid"] = False
     if not intervene:

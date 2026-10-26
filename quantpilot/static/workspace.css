@@ -615,7 +615,7 @@ small,
 }
 .score-track i {
   position: absolute;
-  left: 80%;
+  left: 0;
   top: -3px;
   height: 11px;
   width: 1px;
@@ -1505,4 +1505,120 @@ dialog[open] {
   padding: 14px 0 2px;
   border-top: 1px solid var(--line);
   z-index: 2;
+}
+
+/* Header controls are a separate layout from vertically stacked form labels. */
+.heading-actions {
+  display: grid;
+  grid-template-columns: 110px 164px 128px;
+  gap: 12px;
+  align-items: end;
+  flex-shrink: 0;
+}
+.heading-control {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+}
+.heading-control > label,
+.heading-control > .control-label {
+  display: block;
+  margin: 0;
+  line-height: 16px;
+  font-size: 11px;
+  color: #657e70;
+  white-space: nowrap;
+}
+.heading-control select,
+.heading-control > button,
+.score-setting {
+  height: 42px;
+  width: 100%;
+  margin: 0;
+}
+.heading-control select,
+.heading-control > button {
+  padding: 9px 10px;
+  font-size: 12px;
+}
+.heading-control > button {
+  white-space: nowrap;
+}
+.score-setting {
+  display: flex;
+  gap: 5px;
+}
+.score-setting input {
+  width: 72px;
+  min-width: 0;
+  flex: 1;
+  padding: 8px;
+  font-size: 13px;
+}
+.score-setting button {
+  flex: none;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+.threshold-help {
+  margin: -14px 0 24px;
+  line-height: 1.6;
+}
+.ai-data-panel {
+  background: #f3f8f5;
+  border: 1px solid #dce8df;
+  border-radius: 10px;
+  padding: 16px;
+  margin: 12px 0 10px;
+}
+.ai-data-panel .section-line {
+  margin: 0 0 8px;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ai-data-panel .small,
+.ai-data-panel .fine {
+  line-height: 1.7;
+  margin-top: 10px;
+}
+.ai-data-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+@media (max-width: 1150px) {
+  .page-heading {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+  .heading-actions {
+    width: 100%;
+    grid-template-columns: 110px 164px 128px;
+    justify-content: start;
+  }
+  .threshold-help {
+    margin-top: -12px;
+  }
+}
+@media (max-width: 540px) {
+  .heading-actions {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) minmax(0, 1.25fr);
+    gap: 8px;
+  }
+  .heading-control select,
+  .heading-control > button {
+    font-size: 11px;
+    padding: 8px 6px;
+  }
+  .score-setting button {
+    font-size: 11px;
+    padding: 8px;
+  }
+  .score-setting input {
+    width: 48px;
+    padding: 6px;
+  }
 }

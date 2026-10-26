@@ -38,7 +38,7 @@ def indicators(rows):
     }
 
 
-def evaluate(item, frames, quote, evidence, profile, now):
+def evaluate(item, frames, quote, evidence, profile, now, min_score=80):
     rule = PROFILES[profile]
     stats, blockers, reasons = {}, [], []
     for frame in ("1w", "1d", "4h", "1h"):
@@ -53,6 +53,7 @@ def evaluate(item, frames, quote, evidence, profile, now):
         "evaluated_at": now,
         "expires_at": now + rule["ttl"],
         "profile": profile,
+        "min_score": min_score,
         "indicators": stats,
         "evidence": evidence,
         "blockers": blockers,
@@ -119,6 +120,7 @@ def evaluate(item, frames, quote, evidence, profile, now):
         if not sources:
             points(name, 0, weight, False)
             continue
+        base["expires_at"] = min(base["expires_at"], *(e["expires_at"] for e in sources))
         risk = any(
             e.get("bias") == "risk" or (e.get("event_at") and -3600 < e["event_at"] - now < 7200)
             for e in sources
@@ -144,8 +146,8 @@ def evaluate(item, frames, quote, evidence, profile, now):
     rr = (distance * 2.25 - costs) / (distance + costs)
     if rr < rule["min_rr"]:
         blockers.append("扣除预估费用后的收益风险比不足")
-    if score < 80:
-        reasons.append("尚未达到 80 分有效阈值")
+    if score < min_score:
+        reasons.append(f"尚未达到 {min_score} 分有效阈值")
     plan = {
         "entry": entry,
         "entry_low": entry - distance * 0.12,
@@ -165,7 +167,7 @@ def evaluate(item, frames, quote, evidence, profile, now):
         "id": hashlib.sha256(identity.encode()).hexdigest()[:24],
         "score": score,
         "direction": direction,
-        "valid": score >= 80 and not blockers,
+        "valid": score >= min_score and not blockers,
         "coverage": sum(b["max"] for b in breakdown if b["available"]),
         "breakdown": breakdown,
         "plan": plan,

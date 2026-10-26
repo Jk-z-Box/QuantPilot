@@ -25,6 +25,7 @@ const price = (v) => fmt(v, Number(v) < 10 ? 4 : 2),
 const exchangeName = { binance: "BINANCE", okx: "OKX", gate: "GATE" },
   kindName = { paper: "本地模拟", demo: "交易所测试", live: "真实账户" },
   directions = { long: "做多", short: "做空", wait: "等待", flat: "震荡" };
+let scoreDirty = false;
 let state = null,
   csrf = "",
   selected = "",
@@ -69,6 +70,7 @@ async function api(path, body, method) {
             authentication_required: "请重新登录",
             invalid_credentials: "用户名或密码不正确",
             login_rate_limited: "尝试过多，请稍后重试",
+            invalid_request: "填写内容不符合要求，请检查必填项、格式和数值范围",
           }[data.detail] || data.detail
         : "请求未通过校验",
     );
@@ -239,6 +241,11 @@ function render() {
   $("demoBanner").hidden = !state.demo;
   $("haltBanner").hidden = !state.preferences.halted;
   $("profile").value = state.preferences.profile;
+  if (!scoreDirty) $("minScore").value = state.preferences.min_score;
+  $("scoreThreshold").style.left =
+    `calc(${state.preferences.min_score}% - 1px)`;
+  $("scoreThreshold").title = `有效门槛 ${state.preferences.min_score} 分`;
+  renderAIDataStatus();
   $("halt").textContent = state.preferences.halted
     ? "▷ 解除全局暂停"
     : "Ⅱ 暂停开仓";
@@ -292,7 +299,9 @@ function renderOpportunity() {
   $("signalBadge").textContent = o?.valid
     ? "有效 · " + directions[o.direction]
     : "等待确认";
-  $("scoreLabel").textContent = o?.valid ? "满足入场条件" : "80 分起生效";
+  $("scoreLabel").textContent = o?.valid
+    ? `已达 ${state.preferences.min_score} 分门槛`
+    : `${state.preferences.min_score} 分起生效`;
   $("signalSummary").textContent = o
     ? `${directions[o.direction] || "等待"}方向 · ${o.valid ? "评分及风控检查通过，账户仍会单独检查资金和授权。" : "当前仅供观察，不会新增仓位。"}`
     : "等待多周期数据；新上市合约可能缺少足够周线。";
@@ -341,19 +350,37 @@ function renderOpportunity() {
       (x) => x.dataset.evidence,
     ),
   );
-  $("evidenceList").innerHTML = (
+  let evidenceRows =
     o?.evidence ||
     Object.keys(names).map((c) => ({
       category: c,
       status: "missing",
       note: "等待数据源",
-    }))
-  )
+    }));
+  const item = state.watchlist.find((i) => i.id === selected);
+  const extra = (state.ai_data_evidence || []).filter(
+    (e) =>
+      e.instrument_id === selected &&
+      e.exchange === item?.exchange &&
+      e.symbol === item?.symbol &&
+      !evidenceRows.some(
+        (x) =>
+          x.category === e.category &&
+          (x.status === "fresh" || x.url === e.url),
+      ),
+  );
+  const filled = new Set(
+    extra.filter((e) => e.status === "fresh").map((e) => e.category),
+  );
+  evidenceRows = evidenceRows
+    .filter((e) => !(e.status === "missing" && filled.has(e.category)))
+    .concat(extra);
+  $("evidenceList").innerHTML = evidenceRows
     .map(
       (e) =>
         `<div class="evidence-row"><div><b>${names[e.category]}</b><span class="badge ${e.status === "fresh" ? "good" : e.status === "stale" ? "bad" : ""}">${{ fresh: "数据有效", stale: "已过期", missing: "暂缺数据" }[e.status] || "未验证"}</span></div><p>${esc(e.note || "")} ${e.value !== undefined ? "· " + fmt(e.value, 0) : ""}</p>${e.source ? `<p>${esc(e.source)} ${e.published_at ? "· " + time(e.published_at) : ""}</p>` : ""}${
           e.details
-            ? `<details data-evidence="${esc(e.category + "|" + e.source)}" ${expanded.has(e.category + "|" + e.source) ? "open" : ""}><summary>查看数据与事件</summary>${e.details.max_pain ? `<p>最近到期 ${time(e.details.expiry)}<br>最大痛点估算 ${price(e.details.max_pain)}<br>看涨 OI ${fmt(e.details.call_oi, 0)} / 看跌 OI ${fmt(e.details.put_oi, 0)}</p>` : ""}${(e.details.events || []).map((x) => `<p>${esc(x.title)} · ${time(x.event_at)}</p>`).join("")}${(
+            ? `<details data-evidence="${esc(e.category + "|" + e.source)}" ${expanded.has(e.category + "|" + e.source) ? "open" : ""}><summary>查看数据与事件</summary>${e.details.scope ? `<p>${esc(e.details.scope)}</p>` : ""}${e.details.max_pain ? `<p>最近到期 ${time(e.details.expiry)}<br>最大痛点估算 ${price(e.details.max_pain)}<br>看涨 OI ${fmt(e.details.call_oi, 0)} / 看跌 OI ${fmt(e.details.put_oi, 0)}</p>` : ""}${(e.details.events || []).map((x) => `<p>${esc(x.title)} · ${time(x.event_at)}</p>`).join("")}${(
                 e.details.news || []
               )
                 .slice(0, 4)
@@ -511,6 +538,25 @@ $("candles").onmousemove = (e) => {
 $("candles").onmouseleave = () => {
   $("chartTooltip").hidden = true;
   $("crosshair")?.setAttribute("opacity", "0");
+};
+$("minScore").oninput = () => {
+  scoreDirty = true;
+};
+$("scoreForm").onsubmit = (e) => {
+  e.preventDefault();
+  action(async () => {
+    const value = Number($("minScore").value);
+    if (!Number.isInteger(value) || value < 1 || value > 100)
+      throw Error("有效分数需为 1–100 的整数");
+    await api(
+      "/api/v2/preferences",
+      { ...state.preferences, min_score: value },
+      "PUT",
+    );
+    scoreDirty = false;
+    await refresh();
+    toast(`有效分数已改为 ${value}，正在重新评估`);
+  });
 };
 $("profile").onchange = () =>
   action(async () => {
@@ -976,6 +1022,9 @@ function fillSettings() {
   f.interval.value = state.preferences.ai_interval;
   f.enabled.checked = state.preferences.ai_enabled;
   f.intervene.checked = state.preferences.ai_intervene;
+  $("aiDataForm").enabled.checked = state.preferences.ai_data_enabled;
+  $("aiDataForm").interval.value = String(state.preferences.ai_data_interval);
+  renderAIDataStatus();
   $("openaiSaved").textContent = state.ai_key_saved ? "已保存" : "未配置";
   document
     .querySelectorAll("[data-delete-key]")
@@ -994,6 +1043,59 @@ function fillSettings() {
     )
     .join("");
 }
+function renderAIDataStatus() {
+  if (!state) return;
+  const status = state.ai_data_status || {};
+  $("aiDataBadge").textContent =
+    {
+      disabled: "未启用",
+      idle: "待检索",
+      running: "检索中",
+      ready: "已补全",
+      empty: "未发现可用资料",
+      error: "检索失败",
+    }[status.state] || "未启用";
+  $("aiDataBadge").className =
+    "badge " +
+    (status.state === "ready" ? "good" : status.state === "error" ? "bad" : "");
+  $("aiDataStatus").textContent =
+    (status.message || "未启用") +
+    (status.last_attempt ? " · 最近尝试 " + time(status.last_attempt) : "");
+  $("requestAIData").disabled =
+    !state.preferences.ai_data_enabled || status.state === "running";
+}
+$("aiDataForm").onsubmit = (e) => {
+  e.preventDefault();
+  const f = e.currentTarget;
+  action(async () => {
+    if (
+      f.enabled.checked &&
+      (!state.ai_key_saved || !state.preferences.ai_model)
+    )
+      throw Error("请先保存 OpenAI API Key 和模型，再开启数据补全");
+    await api(
+      "/api/v2/preferences",
+      {
+        ...state.preferences,
+        ai_data_enabled: f.enabled.checked,
+        ai_data_interval: Number(f.interval.value),
+      },
+      "PUT",
+    );
+    await refresh();
+    toast(
+      state.preferences.ai_data_enabled
+        ? "AI 补全已开启，将按设置间隔检索缺失资料"
+        : "AI 补全已关闭，已有补全结果不再计入评分",
+    );
+  });
+};
+$("requestAIData").onclick = () =>
+  action(async () => {
+    const result = await api("/api/v2/ai/data", {});
+    toast(result.message);
+    await refresh();
+  });
 $("aiForm").onsubmit = (e) => {
   e.preventDefault();
   const f = e.currentTarget;
@@ -1111,7 +1213,7 @@ document.querySelectorAll("[data-delete-key]").forEach(
       const provider = b.dataset.deleteKey;
       modal(
         "删除 API 密钥",
-        `<p>确认删除 ${esc(provider)} 的服务器端密钥？</p><p class="muted">${provider === "openai" ? "删除后关闭 AI 复核与 AI 干预。" : "删除后仅保留可用的公开数据来源。"}已有订单保护继续运行。</p><div class="dialog-footer"><button class="secondary" id="cancelKeyDelete">取消</button><button class="danger-outline" id="confirmKeyDelete">确认删除密钥</button></div>`,
+        `<p>确认删除 ${esc(provider)} 的服务器端密钥？</p><p class="muted">${provider === "openai" ? "删除后关闭 AI 复核、AI 干预和联网数据补全。" : "删除后仅保留可用的公开数据来源。"}已有订单保护继续运行。</p><div class="dialog-footer"><button class="secondary" id="cancelKeyDelete">取消</button><button class="danger-outline" id="confirmKeyDelete">确认删除密钥</button></div>`,
       );
       $("cancelKeyDelete").onclick = () => $("dialog").close();
       $("confirmKeyDelete").onclick = () =>
@@ -1124,6 +1226,7 @@ document.querySelectorAll("[data-delete-key]").forEach(
             modelLoaded = false;
             $("aiForm").enabled.checked = false;
             $("aiForm").intervene.checked = false;
+            $("aiDataForm").enabled.checked = false;
             $("aiForm").modelList.innerHTML =
               '<option value="">请先保存密钥再获取</option>';
             $("aiForm").modelMode.value = "custom";
@@ -1138,7 +1241,7 @@ document.querySelectorAll("[data-delete-key]").forEach(
 $("help").onclick = () =>
   modal(
     "从这里开始",
-    `<div class="notice-box"><b>1 · 先看市场</b><p>点击顶部品种卡片切换 K 线；周线、日线、4 小时、1 小时共同参与机会评估。未收盘 K 线只展示，不参与评分。</p></div><div class="notice-box"><b>2 · 理解机会</b><p>达到 80 分且没有阻断项，机会才有效。评分不等于胜率。两档止盈分别显示价格和比例；数据缺失、来源过期和风险事件都会影响有效性。</p></div><div class="notice-box"><b>3 · 用模拟账户验证</b><p>到账户页设置资金和仓位，再启用自动交易。系统会等待有效信号。重启后账户自动交易暂停，需要重新启用。</p></div><div class="notice-box"><b>4 · 连接真实账户</b><p>先添加账户、选择允许交易的品种、保存密钥并读取核对。真实下单需要服务端开关和当前账户的验收记录，界面会显示尚未满足的条件。</p></div>`,
+    `<div class="notice-box"><b>1 · 先看市场</b><p>点击顶部品种卡片切换 K 线；周线、日线、4 小时、1 小时共同参与机会评估。未收盘 K 线只展示，不参与评分。</p></div><div class="notice-box"><b>2 · 理解机会</b><p>达到你设置的有效分数且没有阻断项，机会才有效；默认 80 分，可在顶部修改。评分不等于胜率。两档止盈分别显示价格和比例；数据缺失、来源过期和风险事件都会影响有效性。</p></div><div class="notice-box"><b>3 · 用模拟账户验证</b><p>到账户页设置资金和仓位，再启用自动交易。系统会等待有效信号。重启后账户自动交易暂停，需要重新启用。</p></div><div class="notice-box"><b>4 · 连接真实账户</b><p>先添加账户、选择允许交易的品种、保存密钥并读取核对。真实下单需要服务端开关和当前账户的验收记录，界面会显示尚未满足的条件。</p></div>`,
   );
 action(async () => {
   try {

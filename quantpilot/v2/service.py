@@ -13,7 +13,8 @@ from .execution import ExchangeBroker
 from .feeds import Feeds
 from .limits import contract_limits
 from .market import FuturesMarket
-from .models import Account, Preferences, defaults
+from .models import Account, Preferences, defaults, policy_matches, signal_policy
+from .research import ResearchEngine
 from .signals import evaluate
 
 
@@ -48,6 +49,8 @@ class Workspace:
             }
             for key, value in initial.items():
                 db.execute("INSERT OR IGNORE INTO kv VALUES (?,?)", (key, json.dumps(value)))
+            prefs = {**Preferences().model_dump(), **self.store.read(db, "v2_preferences")}
+            self.store.write(db, "v2_preferences", Preferences.model_validate(prefs).model_dump())
             accounts = self.store.read(db, "v2_accounts")
             migrated = self.store.read(db, "v2_sizing_migration")
             for aid, account in accounts.items():
@@ -63,6 +66,7 @@ class Workspace:
                     account["capital"] = None
             self.store.write(db, "v2_accounts", accounts)
             self.store.write(db, "v2_sizing_migration", migrated)
+        self.research = ResearchEngine(self)
 
     def limits(self, instrument_id, exchange, aid=""):
         item = next((i for i in self.store.get("v2_watchlist") if i["id"] == instrument_id), None)
@@ -238,7 +242,7 @@ class Workspace:
     def delete_key(self, provider):
         if provider == "openai":
             prefs = self.store.get("v2_preferences")
-            self.preferences({**prefs, "ai_enabled": False, "ai_intervene": False})
+            self.preferences({**prefs, "ai_enabled": False, "ai_intervene": False, "ai_data_enabled": False})
             self.ai_status = "未启用 · 密钥已删除"
         self.vault.delete("v2:" + ("ai:" if provider == "openai" else "feed:") + provider)
         self.feeds.cache.clear()
@@ -264,7 +268,10 @@ class Workspace:
             self.store.audit(db, "v2_account_reset", {"account_id": aid, "capital": capital})
 
     def preferences(self, prefs):
-        if prefs["ai_enabled"] and (not prefs["ai_model"] or not self.vault.get("v2:ai:openai")):
+        prefs = Preferences.model_validate(prefs).model_dump()
+        if (prefs["ai_enabled"] or prefs["ai_data_enabled"]) and (
+            not prefs["ai_model"] or not self.vault.get("v2:ai:openai")
+        ):
             raise ValueError("先保存 OpenAI 密钥并填写模型")
         with self.store.transaction() as db:
             previous = self.store.read(db, "v2_preferences")
@@ -284,12 +291,16 @@ class Workspace:
             )
         with self.lock:
             if previous["profile"] != prefs["profile"] or any(
-                previous[k] != prefs[k] for k in ("ai_enabled", "ai_model", "ai_intervene")
+                previous[k] != prefs[k]
+                for k in ("ai_enabled", "ai_model", "ai_intervene", "min_score", "ai_data_enabled")
             ):
                 for op in self.opportunities.values():
                     op["valid"] = False
                     op["blockers"] = ["风险配置已变更，等待重新评估"]
+                    op["reasons"] = []
                 self.ai_cache.clear()
+        if any(previous[k] != prefs[k] for k in ("ai_model", "ai_data_enabled")):
+            self.research.invalidate()
         self.last_evaluation = 0
         return prefs
 
@@ -328,12 +339,15 @@ class Workspace:
                     for category in ("etf", "options", "liquidation", "macro")
                 ]
             )
+            if not self.market.demo:
+                evidence = self.research.supplement(item, evidence)
             # Fetch again after slower data providers; never stamp stale quotes with receipt time.
             try:
                 quote = self.market.quote(item)
             except Exception:
                 quote = {**quote, "timestamp": 0}
-            op = evaluate(item, frames, quote, evidence, prefs["profile"], time.time())
+            op = evaluate(item, frames, quote, evidence, prefs["profile"], time.time(), prefs["min_score"])
+            op["policy"] = signal_policy(prefs)
         with self.lock:
             current_item = next((i for i in self.store.get("v2_watchlist") if i["id"] == key), None)
             if not current_item or (item["symbol"], item["exchange"]) != (
@@ -345,6 +359,19 @@ class Workspace:
             if frames is not None:
                 self.frames[key] = frames
             if op:
+                current_prefs = self.store.get("v2_preferences")
+                if any(
+                    current_prefs[k] != prefs[k]
+                    for k in (
+                        "profile",
+                        "min_score",
+                        "ai_enabled",
+                        "ai_model",
+                        "ai_intervene",
+                        "ai_data_enabled",
+                    )
+                ):
+                    return
                 cached = self.ai_cache.get(key)
                 if (
                     cached
@@ -468,6 +495,8 @@ class Workspace:
                         or not items[key]["enabled"]
                         or not op.get("valid")
                         or op["profile"] != prefs["profile"]
+                        or op.get("min_score", 80) != prefs["min_score"]
+                        or not policy_matches(op, prefs)
                     ):
                         continue
                     if prefs["ai_enabled"] and (
@@ -532,7 +561,7 @@ class Workspace:
                 for r in db.execute("SELECT * FROM v2_orders ORDER BY created DESC LIMIT 100")
             ]
         return {
-            "version": "0.2.1",
+            "version": "0.2.2",
             "now": now,
             "demo": self.market.demo,
             "watchlist": self.store.get("v2_watchlist"),
@@ -545,6 +574,8 @@ class Workspace:
                 k: v["account"]["name"] for k, v in self.store.get("v2_archived_accounts").items()
             },
             "ai_status": self.ai_status,
+            "ai_data_status": self.store.get("v2_ai_data_status"),
+            "ai_data_evidence": self.research.observations(),
             "last_evaluation": self.last_evaluation,
             "providers": {name: bool(self.vault.get("v2:feed:" + name)) for name in ("coinglass", "finnhub")},
             "ai_key_saved": bool(self.vault.get("v2:ai:openai")),
@@ -578,9 +609,12 @@ class Workspace:
         self.quote_thread.start()
         self.thread = threading.Thread(target=loop, name="mission-control", daemon=True)
         self.thread.start()
+        self.research.start()
 
     def stop(self):
         self.stop_event.set()
+        if self.research.thread:
+            self.research.thread.join(timeout=3)
         if self.thread:
             self.thread.join(timeout=25)
         if self.quote_thread:

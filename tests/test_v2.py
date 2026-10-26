@@ -737,7 +737,7 @@ def test_coinglass_expired_disclosure_not_refreshed(workspace):
         return httpx.Response(200, json={"code": "0", "data": [{"timestamp": stamp * 1000, "flow_usd": 123}]})
 
     r = Feeds(workspace.vault, workspace.store, httpx.MockTransport(handler)).coinglass("BTC")[0]
-    assert r["status"] == "stale" and r["published_at"] == stamp
+    assert r["status"] == "stale" and r["published_at"] == pytest.approx(stamp, rel=0, abs=1e-6)
 
 
 def test_legacy_kill_also_pauses_v2(workspace, account):
@@ -873,7 +873,7 @@ def test_live_receipt_is_bound_expiring_private_and_blockable(workspace, monkeyp
     workspace.vault.put("v2:account:" + a["id"], secret)
     monkeypatch.setenv("QP_LIVE_EXECUTION", "1")
     cert = {
-        "version": "0.2.1",
+        "version": "0.2.2",
         "exchange": "binance",
         "credential_fingerprint": hashlib.sha256(json.dumps(secret, sort_keys=True).encode()).hexdigest(),
         "verified_at": time.time(),

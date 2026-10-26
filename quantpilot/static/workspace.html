@@ -110,16 +110,43 @@
                 让数据说清楚，什么时候值得行动。
               </p>
             </div>
-            <div class="heading-actions">
-              <label class="inline-label"
-                >风险偏好<select id="profile" aria-label="风险偏好">
+            <div class="heading-actions" aria-label="交易设置">
+              <div class="heading-control">
+                <label for="profile">风险偏好</label
+                ><select id="profile" aria-label="风险偏好">
                   <option value="conservative">保守</option>
                   <option value="balanced">平衡</option>
                   <option value="aggressive">激进</option>
-                </select></label
-              ><button id="halt" class="danger-outline">Ⅱ 暂停开仓</button>
+                </select>
+              </div>
+              <form id="scoreForm" class="heading-control">
+                <label for="minScore">有效分数 / 100</label>
+                <div class="score-setting">
+                  <input
+                    id="minScore"
+                    type="number"
+                    min="1"
+                    max="100"
+                    step="1"
+                    required
+                    value="80"
+                    aria-describedby="scoreHelp"
+                  /><button class="secondary" aria-label="应用有效分数">
+                    应用
+                  </button>
+                </div>
+              </form>
+              <div class="heading-control">
+                <span class="control-label">自动开仓</span
+                ><button id="halt" class="danger-outline">Ⅱ 暂停开仓</button>
+              </div>
             </div>
           </div>
+          <p id="scoreHelp" class="small muted threshold-help">
+            分数可设为
+            1–100；达到门槛仍须通过行情、时效、资金与风控检查。加仓需额外 5
+            分（最高 100）。
+          </p>
           <section data-panel="market">
             <div class="section-line">
               <div>
@@ -189,7 +216,7 @@
                   <span id="scoreLabel" class="muted">80 分起生效</span>
                 </div>
                 <div class="score-track">
-                  <span id="scoreBar"></span><i></i>
+                  <span id="scoreBar"></span><i id="scoreThreshold"></i>
                 </div>
                 <div id="signalSummary" class="signal-summary">
                   正在分析周线、日线、4 小时和 1 小时趋势。
@@ -373,6 +400,48 @@
                   </div>
                   <span class="badge good">公开数据优先</span>
                 </div>
+                <form id="aiDataForm" class="ai-data-panel">
+                  <div class="section-line">
+                    <b>AI 补全缺失数据</b
+                    ><span id="aiDataBadge" class="badge">未启用</span>
+                  </div>
+                  <label class="check"
+                    ><input
+                      name="enabled"
+                      type="checkbox"
+                    />启用联网检索补全（会产生 API 和搜索费用）</label
+                  >
+                  <p class="small muted">
+                    使用已保存的 OpenAI 密钥与模型，联网查找缺失或过期的资料。
+                    核对原文和日期后，显示来源并计中性覆盖分。此开关独立于 AI
+                    风险复核。
+                  </p>
+                  <label
+                    >自动检索间隔<select name="interval">
+                      <option value="900">每 15 分钟</option>
+                      <option value="1800" selected>每 30 分钟</option>
+                      <option value="3600">每 1 小时</option>
+                      <option value="86400">每天</option>
+                    </select></label
+                  >
+                  <div class="ai-data-actions">
+                    <button class="secondary">保存补全设置</button
+                    ><button
+                      id="requestAIData"
+                      type="button"
+                      class="text-button"
+                    >
+                      立即补全一次
+                    </button>
+                  </div>
+                  <p id="aiDataStatus" class="small" role="status">未启用</p>
+                  <p class="fine">
+                    模型需支持联网搜索。每轮最多 3 个品种、4
+                    次搜索调用，手动检索至少间隔 5 分钟。
+                    查不到可靠资料时仍显示缺失；不补造实时行情、K
+                    线或清算热力图。
+                  </p>
+                </form>
                 <div class="source-row">
                   <b>交易所公共行情</b><span class="badge good">无需密钥</span>
                   <p>币安 / OKX / Gate 永续合约、K 线、资金费率与持仓量。</p>
