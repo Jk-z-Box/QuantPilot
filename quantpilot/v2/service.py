@@ -11,6 +11,7 @@ from .accounts import PaperBroker, ledger, valuation
 from .ai import apply_revision, review
 from .execution import ExchangeBroker
 from .feeds import Feeds
+from .limits import contract_limits
 from .market import FuturesMarket
 from .models import Account, Preferences, defaults
 from .signals import evaluate
@@ -42,9 +43,50 @@ class Workspace:
                 "v2_ledgers": {"paper-default": ledger(10000)},
                 "v2_external": {},
                 "v2_evidence": [],
+                "v2_archived_accounts": {},
+                "v2_sizing_migration": {},
             }
             for key, value in initial.items():
                 db.execute("INSERT OR IGNORE INTO kv VALUES (?,?)", (key, json.dumps(value)))
+            accounts = self.store.read(db, "v2_accounts")
+            migrated = self.store.read(db, "v2_sizing_migration")
+            for aid, account in accounts.items():
+                if "leverage" in account or any("notional" in s for s in account["sizing"]):
+                    migrated.setdefault(aid, copy.deepcopy(account))
+                    leverage = account.pop("leverage", 1)
+                    for sizing in account["sizing"]:
+                        sizing.pop("notional", None)
+                        sizing.setdefault("quantity", None)
+                        sizing.setdefault("leverage", leverage)
+                    account["auto"] = False
+                if account["kind"] != "paper":
+                    account["capital"] = None
+            self.store.write(db, "v2_accounts", accounts)
+            self.store.write(db, "v2_sizing_migration", migrated)
+
+    def limits(self, instrument_id, exchange, aid=""):
+        item = next((i for i in self.store.get("v2_watchlist") if i["id"] == instrument_id), None)
+        if not item or exchange not in ("binance", "okx", "gate"):
+            raise ValueError("请选择有效交易对及交易所")
+        account = self.store.get("v2_accounts").get(aid)
+        try:
+            if (
+                account
+                and account["kind"] != "paper"
+                and account["exchange"] == exchange
+                and self.vault.get("v2:account:" + aid)
+            ):
+                client = self.exchange.client(account)
+                with self.exchange.locks[aid]:
+                    return contract_limits(client, exchange, item["symbol"])
+            with self.market.locks[exchange]:
+                return contract_limits(self.market.client(exchange), exchange, item["symbol"])
+        except Exception:
+            return {
+                "max_leverage": 1,
+                "verified": False,
+                "note": "合约规格暂无法核验，仅允许 1 倍；请检查网络、合约是否上市及账户 API。",
+            }
 
     def save_watchlist(self, items):
         with self.store.transaction() as db:
@@ -80,10 +122,18 @@ class Workspace:
         return items
 
     def save_account(self, account):
+        account = Account.model_validate(account).model_dump()
         account["id"] = account["id"] or secrets.token_hex(8)
+        for sizing in account["sizing"]:
+            if sizing["leverage"] > 1:
+                limits = self.limits(sizing["instrument_id"], account["exchange"], account["id"])
+                if not limits["verified"] or sizing["leverage"] > limits["max_leverage"]:
+                    raise ValueError(f"{sizing['instrument_id']} 杠杆未通过交易所上限校验：{limits['note']}")
         with self.store.transaction() as db:
             accounts = self.store.read(db, "v2_accounts")
             old = accounts.get(account["id"])
+            if account["id"] in self.store.read(db, "v2_archived_accounts"):
+                raise ValueError("账户已删除，请新建账户")
             if len(accounts) >= 20 and not old:
                 raise ValueError("最多支持 20 个账户")
             watch = {i["id"]: i for i in self.store.read(db, "v2_watchlist")}
@@ -104,6 +154,14 @@ class Workspace:
                 if not account["allowed"]:
                     raise ValueError("请先授权自动交易的交易对")
             books = self.store.read(db, "v2_ledgers")
+            positions = (
+                books.get(account["id"], {}).get("positions", {})
+                if account["kind"] == "paper"
+                else self.store.read(db, "v2_managed").get(account["id"], {})
+            )
+            by_id = {s["instrument_id"]: s for s in account["sizing"]}
+            if any(k in by_id and by_id[k]["leverage"] != p["leverage"] for k, p in positions.items()):
+                raise ValueError("请先平仓，再更改该交易对杠杆")
             if old and old["capital"] != account["capital"]:
                 raise ValueError("修改初始资金请使用重置账户")
             accounts[account["id"]] = account
@@ -117,6 +175,79 @@ class Workspace:
                 {"account_id": account["id"], "kind": account["kind"], "auto": account["auto"]},
             )
         return account
+
+    def delete_account(self, aid):
+        with self.exchange.guard:
+            guard = self.exchange.locks.setdefault(aid, threading.RLock())
+        with guard, self.store.transaction() as db:
+            accounts = self.store.read(db, "v2_accounts")
+            account = accounts.get(aid)
+            if not account:
+                raise ValueError("账户不存在或已删除")
+            if account["auto"]:
+                raise ValueError("请先暂停该账户自动交易")
+            books = self.store.read(db, "v2_ledgers")
+            if books.get(aid, {}).get("positions") or self.store.read(db, "v2_managed").get(aid):
+                raise ValueError("账户仍有持仓，请先平仓或重置模拟账户")
+            if (
+                self.store.read(db, "v2_execution_blocks").get(aid)
+                or db.execute(
+                    "SELECT 1 FROM v2_orders WHERE account_id=? AND state IN ('sending','unknown')", (aid,)
+                ).fetchone()
+            ):
+                raise ValueError("账户存在待核对订单，不能删除")
+            archives = self.store.read(db, "v2_archived_accounts")
+            archives[aid] = {"account": account, "ledger": books.pop(aid, None), "deleted_at": time.time()}
+            accounts.pop(aid)
+            db.execute("DELETE FROM credentials WHERE name=?", ("v2:account:" + aid,))
+            self.store.write(db, "v2_accounts", accounts)
+            self.store.write(db, "v2_ledgers", books)
+            self.store.write(db, "v2_archived_accounts", archives)
+            self.store.audit(db, "v2_account_deleted", {"account_id": aid})
+        with self.exchange.guard:
+            self.exchange.clients = {k: v for k, v in self.exchange.clients.items() if k[0] != aid}
+        return {"deleted": True, "history_preserved": True}
+
+    def save_credentials(self, aid, credentials):
+        with self.exchange.guard:
+            guard = self.exchange.locks.setdefault(aid, threading.RLock())
+        with guard, self.store.transaction() as db:
+            account = self.store.read(db, "v2_accounts").get(aid)
+            if not account or account["kind"] == "paper":
+                raise ValueError("请选择有效的交易所账户")
+            if account["auto"]:
+                raise ValueError("请先停止该账户自动交易")
+            if self.store.read(db, "v2_managed").get(aid) or self.store.read(db, "v2_execution_blocks").get(
+                aid
+            ):
+                raise ValueError("账户仍有受管理仓位或待核对状态，请先处理再更换密钥")
+            if db.execute(
+                "SELECT 1 FROM v2_orders WHERE account_id=? AND state IN ('sending','unknown')", (aid,)
+            ).fetchone():
+                raise ValueError("账户有待核对订单，不能更换密钥")
+            if account["exchange"] == "okx" and not credentials["password"]:
+                raise ValueError("OKX 账户需要填写 Passphrase")
+            encrypted = self.vault.fernet.encrypt(json.dumps(credentials).encode())
+            db.execute("INSERT OR REPLACE INTO credentials VALUES (?,?)", ("v2:account:" + aid, encrypted))
+            self.store.audit(db, "credential_saved", {"name": "v2:account:" + aid})
+            # Clear clients before releasing the execution lock so an old client cannot persist.
+            with self.exchange.guard:
+                self.exchange.clients = {k: v for k, v in self.exchange.clients.items() if k[0] != aid}
+        return {"saved": True}
+
+    def delete_key(self, provider):
+        if provider == "openai":
+            prefs = self.store.get("v2_preferences")
+            self.preferences({**prefs, "ai_enabled": False, "ai_intervene": False})
+            self.ai_status = "未启用 · 密钥已删除"
+        self.vault.delete("v2:" + ("ai:" if provider == "openai" else "feed:") + provider)
+        self.feeds.cache.clear()
+        self.last_evaluation = 0
+        with self.lock:
+            for op in self.opportunities.values():
+                op["valid"] = False
+                op["blockers"] = ["数据配置已变更，等待重新评估"]
+            self.ai_cache.clear()
 
     def reset(self, aid, capital):
         with self.store.transaction() as db:
@@ -401,7 +532,7 @@ class Workspace:
                 for r in db.execute("SELECT * FROM v2_orders ORDER BY created DESC LIMIT 100")
             ]
         return {
-            "version": "0.2.0",
+            "version": "0.2.1",
             "now": now,
             "demo": self.market.demo,
             "watchlist": self.store.get("v2_watchlist"),
@@ -410,6 +541,9 @@ class Workspace:
             "opportunities": ops,
             "accounts": accounts,
             "orders": orders,
+            "archived_accounts": {
+                k: v["account"]["name"] for k, v in self.store.get("v2_archived_accounts").items()
+            },
             "ai_status": self.ai_status,
             "last_evaluation": self.last_evaluation,
             "providers": {name: bool(self.vault.get("v2:feed:" + name)) for name in ("coinglass", "finnhub")},

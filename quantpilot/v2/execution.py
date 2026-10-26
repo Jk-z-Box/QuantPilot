@@ -10,6 +10,7 @@ import ccxt
 
 from ..market import decimal as D
 from .accounts import ledger, size_order
+from .limits import contract_limits
 
 
 class ExchangeBroker:
@@ -75,7 +76,7 @@ class ExchangeBroker:
                 "timeout_no_duplicate",
             )
             ready = (
-                cert["version"] == "0.2.0"
+                cert["version"] == "0.2.1"
                 and cert["exchange"] == account["exchange"]
                 and cert["credential_fingerprint"] == fingerprint
                 and all(cert["checks"].get(k) is True for k in required)
@@ -196,6 +197,18 @@ class ExchangeBroker:
                 raise ValueError("非受支持的线性永续合约")
             contract_size = D(market["contractSize"])
             amount = float(client.amount_to_precision(item["symbol"], str(sizing["qty"] / contract_size)))
+            setting = next(s for s in account["sizing"] if s["instrument_id"] == key)
+            if setting["mode"] == "fixed" and abs(D(amount) * contract_size - sizing["qty"]) > D(
+                ".000000000001"
+            ):
+                raise ValueError("固定币数量不符合交易所数量步长，请调整仓位设置")
+            if sizing["leverage"] > 1:
+                total_qty = float(D(amount) * contract_size + (D(existing["qty"]) if existing else 0))
+                limits = contract_limits(
+                    client, account["exchange"], item["symbol"], float(sizing["price"]) * total_qty, total_qty
+                )
+                if sizing["leverage"] > limits["max_leverage"]:
+                    raise ValueError("该仓位数量对应的交易所档位不支持所选杠杆")
             if amount <= 0:
                 raise ValueError("低于最小合约数量")
             minimum = market.get("limits", {}).get("amount", {}).get("min")
@@ -366,6 +379,7 @@ class ExchangeBroker:
                         "adds": old["adds"] + 1 if old else 0,
                         "tp_done": old["tp_done"] if old else [],
                         "initial_notional": initial,
+                        "initial_qty": old.get("initial_qty") if old else str(base_qty),
                         "legs": (old["legs"] if old else []) + [result],
                         "risk_reduced": old["risk_reduced"] if old else False,
                         "symbol": item["symbol"],

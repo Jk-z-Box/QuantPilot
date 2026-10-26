@@ -305,12 +305,32 @@
                   OpenAI 发送行情、事件摘要及匿名化账户资金与持仓数据。
                 </p>
                 <form id="aiForm">
-                  <label
-                    >模型 ID<input
+                  <div class="model-toolbar">
+                    <label
+                      >模型 ID 输入方式<select name="modelMode">
+                        <option value="list">从 API 模型列表选择</option>
+                        <option value="custom">自定义填写</option>
+                      </select></label
+                    ><button id="loadModels" class="secondary" type="button">
+                      获取 / 刷新模型
+                    </button>
+                  </div>
+                  <label id="modelListLabel"
+                    >可选模型<select name="modelList">
+                      <option value="">请先保存密钥，再获取模型</option>
+                    </select></label
+                  >
+                  <label id="modelCustomLabel"
+                    >自定义模型 ID<input
                       name="model"
-                      placeholder="填写你的 API 账号可用模型"
-                      maxlength="100" /></label
-                  ><label
+                      placeholder="填写你的 API 账户可用模型 ID"
+                      maxlength="100"
+                      pattern="[a-zA-Z0-9_.:-]*"
+                  /></label>
+                  <p id="modelMessage" class="small muted" role="status">
+                    获取不到模型列表时，可以使用自定义填写。
+                  </p>
+                  <label
                     >自动复核间隔<select name="interval">
                       <option value="60">每分钟</option>
                       <option value="300">每 5 分钟</option>
@@ -335,6 +355,13 @@
                       placeholder="仅在需要新增或更换时填写"
                       required /></label
                   ><button class="secondary">加密保存密钥</button
+                  ><button
+                    type="button"
+                    class="danger-outline"
+                    data-delete-key="openai"
+                    disabled
+                  >
+                    删除密钥</button
                   ><span id="openaiSaved" class="small muted"></span>
                 </form>
               </article>
@@ -358,34 +385,80 @@
                     单市场已发生清算量。
                   </p>
                 </div>
-                <form class="key-form" data-provider="coinglass">
-                  <b>CoinGlass</b>
-                  <p class="small muted">
-                    已披露 ETF 资金流、清算量与热力图，具体权限取决于你的套餐。
+                <div class="source-row">
+                  <b>BTC ETF 已披露资金流</b
+                  ><span class="badge good">免费 · 无需密钥</span>
+                  <p>
+                    <a
+                      href="https://www.tftc.io/bitcoin-etf-flows"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      >The Commoner Bitcoin ETF Tracker / TFTC ↗</a
+                    >，CC BY 4.0。按披露交易日显示，超过 4 天不计分；目前仅覆盖
+                    BTC。ETH / SOL 可保留自选来源或人工核验导入。
                   </p>
-                  <label
-                    >API Key<input
-                      type="password"
-                      name="key"
-                      autocomplete="off"
-                      required /></label
-                  ><button class="secondary">保存数据密钥</button
-                  ><span id="coinglassSaved" class="small muted"></span>
-                </form>
-                <form class="key-form" data-provider="finnhub">
-                  <b>Finnhub</b>
-                  <p class="small muted">
-                    公司新闻与财报日历。没有权限时显示缺失，不填入推测数据。
+                </div>
+                <div class="source-row">
+                  <b>公司公告与新闻索引</b
+                  ><span class="badge good">免费 · 无需密钥</span>
+                  <p>
+                    AVGO 优先读取 Broadcom 官方 RSS；不可用时使用 Google News
+                    公开标题与来源链接。其他股票 / ETF
+                    使用公开新闻索引。不是完整财报日历，未来财报时间需核实后导入。
                   </p>
-                  <label
-                    >API Key<input
-                      type="password"
-                      name="key"
-                      autocomplete="off"
-                      required /></label
-                  ><button class="secondary">保存数据密钥</button
-                  ><span id="finnhubSaved" class="small muted"></span>
-                </form>
+                </div>
+                <div class="notice-box">
+                  公开来源会受地区、更新频率与网站访问策略影响。数据过期或缺失会显示在「市场背景与事件」，不会补成虚假数据。尚无经核实的免费全市场清算热力图替代。
+                </div>
+                <details class="optional-feeds">
+                  <summary>可选增强来源 · CoinGlass / Finnhub</summary>
+                  <p class="muted small">
+                    不配置也会使用上述公开来源。保留这些接口，方便补充你的数据权限。
+                  </p>
+                  <form class="key-form" data-provider="coinglass">
+                    <b>CoinGlass</b>
+                    <p class="small muted">
+                      已披露 ETF
+                      资金流、清算量与热力图，具体权限取决于你的套餐。
+                    </p>
+                    <label
+                      >API Key<input
+                        type="password"
+                        name="key"
+                        autocomplete="off"
+                        required /></label
+                    ><button class="secondary">保存数据密钥</button
+                    ><button
+                      type="button"
+                      class="danger-outline"
+                      data-delete-key="coinglass"
+                      disabled
+                    >
+                      删除密钥</button
+                    ><span id="coinglassSaved" class="small muted"></span>
+                  </form>
+                  <form class="key-form" data-provider="finnhub">
+                    <b>Finnhub</b>
+                    <p class="small muted">
+                      公司新闻与财报日历。没有权限时显示缺失，不填入推测数据。
+                    </p>
+                    <label
+                      >API Key<input
+                        type="password"
+                        name="key"
+                        autocomplete="off"
+                        required /></label
+                    ><button class="secondary">保存数据密钥</button
+                    ><button
+                      type="button"
+                      class="danger-outline"
+                      data-delete-key="finnhub"
+                      disabled
+                    >
+                      删除密钥</button
+                    ><span id="finnhubSaved" class="small muted"></span>
+                  </form>
+                </details>
               </article>
             </div>
             <article class="card">

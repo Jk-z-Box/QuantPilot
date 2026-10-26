@@ -1399,3 +1399,110 @@ details summary {
 .market-search {
   margin-top: 15px;
 }
+
+/* Forms keep units and destructive controls visible on narrow screens. */
+#dialogBody {
+  overflow-wrap: anywhere;
+}
+.sizing-row details > summary {
+  cursor: pointer;
+  padding: 6px 0 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.sizing-help {
+  font-size: 12px;
+  line-height: 1.8;
+  padding: 12px 14px;
+  background: #f3f8f4;
+  border-radius: 8px;
+  margin-top: 8px;
+  color: #536b5b;
+}
+.sizing-grid {
+  grid-template-columns: 1fr 1fr;
+}
+.limit-control {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+}
+.limit-note {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.model-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+  flex-wrap: wrap;
+  margin: 15px 0;
+}
+.model-toolbar label {
+  flex: 1;
+  margin: 0;
+  min-width: 180px;
+}
+.model-toolbar button {
+  min-height: 41px;
+}
+.key-form button {
+  margin: 4px 8px 4px 0;
+}
+.optional-feeds {
+  margin-top: 20px;
+}
+.optional-feeds > summary {
+  cursor: pointer;
+  font-size: 13px;
+  padding: 12px 0;
+}
+.account-card h2 {
+  overflow-wrap: anywhere;
+}
+#dialogError {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+@media (max-width: 540px) {
+  .sizing-grid {
+    grid-template-columns: 1fr;
+  }
+  .model-toolbar {
+    align-items: stretch;
+  }
+  .model-toolbar button {
+    width: 100%;
+  }
+}
+
+dialog[open] {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.dialog-head {
+  flex: none;
+}
+#dialogBody {
+  overflow-y: auto;
+  min-height: 0;
+  padding: 0 2px;
+}
+.dialog-footer {
+  position: sticky;
+  bottom: 0;
+  background: #fff;
+  padding: 14px 0 2px;
+  border-top: 1px solid var(--line);
+  z-index: 2;
+}

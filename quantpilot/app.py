@@ -148,7 +148,7 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
 
     @app.get("/healthz")
     def health():
-        return {"status": "ok", "version": "0.2.0", "mode": "paper-first"}
+        return {"status": "ok", "version": "0.2.1", "mode": "paper-first"}
 
     @app.post("/api/login")
     def login(body: Login, request: Request, response: Response):

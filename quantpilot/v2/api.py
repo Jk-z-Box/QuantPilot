@@ -5,6 +5,7 @@ import time
 from fastapi import Depends, HTTPException
 from pydantic import Field
 
+from .ai import list_models
 from .models import Account, AccountSecrets, Evidence, Instrument, KeyInput, Model, Preferences, Reset
 
 
@@ -27,6 +28,14 @@ def install(app, workspace, session, mutation):
     @app.get("/api/v2/state", dependencies=[Depends(session)])
     def state():
         return workspace.state()
+
+    @app.get("/api/v2/models", dependencies=[Depends(session)])
+    def models():
+        return safe(list_models, workspace.vault)
+
+    @app.get("/api/v2/limits/{instrument_id}", dependencies=[Depends(session)])
+    def limits(instrument_id: str, exchange: str = "binance", account_id: str = ""):
+        return safe(workspace.limits, instrument_id, exchange, account_id)
 
     @app.put("/api/v2/watchlist", dependencies=[Depends(mutation)])
     def watch(body: Watchlist):
@@ -64,24 +73,21 @@ def install(app, workspace, session, mutation):
     def account(body: Account):
         return safe(workspace.save_account, body.model_dump())
 
+    @app.delete("/api/v2/accounts/{aid}", dependencies=[Depends(mutation)])
+    def delete_account(aid: str):
+        return safe(workspace.delete_account, aid)
+
     @app.post("/api/v2/accounts/{aid}/credentials", dependencies=[Depends(mutation)])
     def credentials(aid: str, body: AccountSecrets):
-        a = workspace.store.get("v2_accounts").get(aid)
-        if not a or a["kind"] == "paper":
-            raise HTTPException(404, "请选择交易所账户")
-        if a["auto"]:
-            raise HTTPException(409, "请先停止该账户自动交易")
-        if workspace.store.get("v2_managed").get(aid):
-            raise HTTPException(409, "账户仍有受管理仓位，请先完成核对与退出再更换密钥")
-        workspace.vault.put(
-            "v2:account:" + aid,
+        return safe(
+            workspace.save_credentials,
+            aid,
             {
                 "apiKey": body.api_key.get_secret_value(),
                 "secret": body.secret.get_secret_value(),
                 "password": body.passphrase.get_secret_value(),
             },
         )
-        return {"saved": True}
 
     @app.post("/api/v2/accounts/{aid}/check", dependencies=[Depends(mutation)])
     def check(aid: str):
@@ -131,8 +137,7 @@ def install(app, workspace, session, mutation):
     def delete_key(provider: str):
         if provider not in ("openai", "coinglass", "finnhub"):
             raise HTTPException(404, "服务不存在")
-        workspace.vault.delete("v2:" + ("ai:" if provider == "openai" else "feed:") + provider)
-        workspace.feeds.cache.clear()
+        workspace.delete_key(provider)
         return {"deleted": True}
 
     @app.post("/api/v2/evidence", dependencies=[Depends(mutation)])

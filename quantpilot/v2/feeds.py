@@ -11,6 +11,8 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
+from .public_feeds import ETF_URL, btc_etf, company_news
+
 FED = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
 
 
@@ -199,10 +201,22 @@ class Feeds:
         if liquidation:
             out.append(liquidation)
         if item["group"] == "equity":
-            company = self.company(asset)
+            company = self.cached(
+                ("public_company", asset), 600, lambda: company_news(self.get, asset, time.time())
+            )
             if company:
                 out.append(company)
-        cg = self.coinglass(asset)
+            configured_company = self.company(asset)
+            if configured_company:
+                out.append(configured_company)
+        public_etf = (
+            self.cached("public_btc_etf", 900, lambda: btc_etf(self.get(ETF_URL), time.time()))
+            if asset == "BTC"
+            else None
+        )
+        if public_etf:
+            out.append(public_etf)
+        cg = self.coinglass(asset) if not public_etf or public_etf["status"] != "fresh" else None
         if cg:
             out.extend(cg)
         for category in ("etf", "options", "liquidation", "macro"):

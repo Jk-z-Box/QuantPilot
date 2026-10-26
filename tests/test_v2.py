@@ -17,63 +17,6 @@ from quantpilot.v2.models import Account, Instrument, Preferences, Sizing
 from quantpilot.v2.signals import evaluate, indicators
 
 
-@pytest.fixture
-def workspace(app):
-    return app.state.workspace
-
-
-@pytest.fixture
-def quote():
-    return {
-        "mid": 100.0,
-        "bid": 99.99,
-        "ask": 100.01,
-        "timestamp": time.time(),
-        "received_at": time.time(),
-        "funding_rate": 0.0001,
-        "open_interest": 100,
-        "mark": 100,
-        "source": "test",
-    }
-
-
-@pytest.fixture
-def opportunity():
-    return {
-        "id": "test-signal",
-        "instrument_id": "btc",
-        "exchange": "binance",
-        "symbol": "BTC/USDT:USDT",
-        "direction": "long",
-        "score": 90,
-        "valid": True,
-        "coverage": 100,
-        "evaluated_at": time.time(),
-        "expires_at": time.time() + 120,
-        "profile": "balanced",
-        "blockers": [],
-        "reasons": [],
-        "plan": {
-            "entry": 100,
-            "entry_low": 99,
-            "entry_high": 101,
-            "stop": 96,
-            "targets": [{"price": 106, "ratio": 0.5}, {"price": 112, "ratio": 0.5}],
-            "rr": 2,
-            "risk_per_unit": 4,
-            "add_at": 103,
-            "reduce_at": 98,
-        },
-    }
-
-
-@pytest.fixture
-def account(workspace):
-    a = workspace.store.get("v2_accounts")["paper-default"]
-    a["auto"] = True
-    return workspace.save_account(a)
-
-
 def universe(workspace):
     return {i["id"]: i for i in workspace.store.get("v2_watchlist")}
 
@@ -174,7 +117,7 @@ def test_stale_quote_never_fills_or_closes(workspace, account, opportunity, quot
 
 
 def test_fixed_size_is_not_silently_reduced(workspace, account, opportunity, quote):
-    account["sizing"] = [Sizing(instrument_id="btc", mode="fixed", notional=50000).model_dump()]
+    account["sizing"] = [Sizing(instrument_id="btc", mode="fixed", quantity=500).model_dump()]
     account = workspace.save_account(account)
     with pytest.raises(ValueError, match="固定"):
         workspace.paper.enter(account, opportunity, {"btc": quote}, universe(workspace), "balanced")
@@ -439,6 +382,11 @@ class ExecutionClient:
         self.name, self.config = name, config
         self.calls, self.orders, self.positions = [], {}, {}
         self.failure, self.partial = "", 1
+        self.has = {"fetchMarketLeverageTiers": True}
+        self.precisionMode = 4
+
+    def fetch_market_leverage_tiers(self, symbol):
+        return [{"minNotional": 0, "maxNotional": 1000000, "maxLeverage": 100}]
 
     def set_sandbox_mode(self, enabled):
         self.sandbox = enabled
@@ -534,8 +482,17 @@ def demo_account(workspace, monkeypatch, exchange="binance"):
     items[0]["exchange"] = exchange
     workspace.save_watchlist(items)
     a = Account(
-        id=aid, name="exchange test", kind="demo", exchange=exchange, allowed=["btc"], leverage=2, auto=True
+        id=aid,
+        name="exchange test",
+        kind="demo",
+        exchange=exchange,
+        allowed=["btc"],
+        sizing=[Sizing(instrument_id="btc", quantity=1, leverage=2)],
+        auto=True,
     ).model_dump()
+    monkeypatch.setattr(
+        workspace, "limits", lambda *args: {"verified": True, "max_leverage": 100, "note": "test"}
+    )
     a = workspace.save_account(a)
     broker = ExchangeBroker(workspace.store, workspace.vault, ExecutionClient)
     return a, broker
@@ -633,9 +590,7 @@ def test_changed_market_cannot_use_old_signal(workspace, account, opportunity, q
 
 
 def test_maximum_reserves_room_and_enforces_add_count(workspace, account, opportunity, quote):
-    account["sizing"] = [
-        Sizing(instrument_id="btc", notional=300, add_count=1, add_ratios=[0.5]).model_dump()
-    ]
+    account["sizing"] = [Sizing(instrument_id="btc", quantity=3, add_count=1, add_ratios=[0.5]).model_dump()]
     account = workspace.save_account(account)
     r = workspace.paper.enter(account, opportunity, {"btc": quote}, universe(workspace), "balanced")
     assert Decimal(r["qty"]) * Decimal(r["price"]) < 201
@@ -652,7 +607,7 @@ def test_maximum_reserves_room_and_enforces_add_count(workspace, account, opport
 
 def test_fixed_add_is_not_rejected_by_unrealized_gain(workspace, account, opportunity, quote):
     account["sizing"] = [
-        Sizing(instrument_id="btc", mode="fixed", notional=100, add_count=1, add_ratios=[0.5]).model_dump()
+        Sizing(instrument_id="btc", mode="fixed", quantity=1, add_count=1, add_ratios=[0.5]).model_dump()
     ]
     account = workspace.save_account(account)
     workspace.paper.enter(account, opportunity, {"btc": quote}, universe(workspace), "balanced")
@@ -918,7 +873,7 @@ def test_live_receipt_is_bound_expiring_private_and_blockable(workspace, monkeyp
     workspace.vault.put("v2:account:" + a["id"], secret)
     monkeypatch.setenv("QP_LIVE_EXECUTION", "1")
     cert = {
-        "version": "0.2.0",
+        "version": "0.2.1",
         "exchange": "binance",
         "credential_fingerprint": hashlib.sha256(json.dumps(secret, sort_keys=True).encode()).hexdigest(),
         "verified_at": time.time(),

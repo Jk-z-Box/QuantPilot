@@ -12,7 +12,6 @@ PROFILES = {
         "label": "保守",
         "risk": 0.003,
         "exposure": 0.30,
-        "leverage": 1,
         "ttl": 120,
         "min_rr": 2,
         "volume": 1.2,
@@ -22,7 +21,6 @@ PROFILES = {
         "label": "平衡",
         "risk": 0.006,
         "exposure": 0.60,
-        "leverage": 2,
         "ttl": 180,
         "min_rr": 1.8,
         "volume": 1,
@@ -32,7 +30,6 @@ PROFILES = {
         "label": "激进",
         "risk": 0.01,
         "exposure": 0.90,
-        "leverage": 3,
         "ttl": 240,
         "min_rr": 1.6,
         "volume": 0.8,
@@ -78,7 +75,8 @@ class Preferences(Model):
 class Sizing(Model):
     instrument_id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,64}$")
     mode: Literal["fixed", "maximum"] = "maximum"
-    notional: float = Field(default=100, ge=5, le=1000000)
+    quantity: float | None = Field(default=None, gt=0, le=1000000000)
+    leverage: int = Field(default=1, ge=1, le=1000)
     add_count: int | None = Field(default=None, ge=0, le=5)
     add_ratios: list[float] = Field(default_factory=list, max_length=5)
 
@@ -96,19 +94,26 @@ class Account(Model):
     name: str = Field(min_length=1, max_length=50)
     kind: Literal["paper", "demo", "live"] = "paper"
     exchange: Literal["binance", "okx", "gate"] = "binance"
-    capital: float = Field(default=10000, ge=100, le=100000000)
-    leverage: int = Field(default=1, ge=1, le=3)
+    capital: float | None = Field(default=None, ge=100, le=100000000)
     auto: bool = False
     allowed: list[str] = Field(default_factory=list, max_length=30)
     sizing: list[Sizing] = Field(default_factory=list, max_length=30)
 
     @model_validator(mode="after")
     def valid_sizing(self):
+        if self.kind == "paper":
+            self.capital = 10000 if self.capital is None else self.capital
+        else:
+            self.capital = None
         ids = [s.instrument_id for s in self.sizing]
         if len(ids) != len(set(ids)) or len(self.allowed) != len(set(self.allowed)):
             raise ValueError("交易对不可重复")
         if self.kind != "paper" and not set(ids) <= set(self.allowed):
             raise ValueError("仓位设置只允许已授权交易对")
+        if self.auto and (not self.sizing or any(s.quantity is None for s in self.sizing)):
+            raise ValueError("请先设置交易对的币数量，再启用自动交易")
+        if self.auto and self.kind != "paper" and set(ids) != set(self.allowed):
+            raise ValueError("每个授权交易对都需要设置仓位数量")
         return self
 
 

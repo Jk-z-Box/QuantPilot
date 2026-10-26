@@ -1,12 +1,40 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Literal
 
 import httpx
 from pydantic import Field, model_validator
 
 from .models import PROFILES, Model
+
+
+def list_models(vault, transport=None):
+    secret = vault.get("v2:ai:openai")
+    if not secret:
+        raise ValueError("请先保存 OpenAI API Key；也可以直接填写模型 ID")
+    try:
+        with httpx.Client(timeout=12, transport=transport, follow_redirects=False) as client:
+            response = client.get(
+                "https://api.openai.com/v1/models", headers={"Authorization": "Bearer " + secret["apiKey"]}
+            )
+            response.raise_for_status()
+            ids = sorted(
+                {
+                    m["id"]
+                    for m in response.json()["data"]
+                    if isinstance(m.get("id"), str) and re.fullmatch(r"[a-zA-Z0-9_.:-]{1,100}", m["id"])
+                }
+            )
+        if not ids:
+            raise ValueError("empty")
+        return {
+            "models": ids[:500],
+            "note": "API 返回账户可见模型；请选择支持 Responses 和结构化输出的文本模型。",
+        }
+    except Exception:
+        raise ValueError("模型列表获取失败，请检查 API 权限或使用自定义模型 ID") from None
 
 
 class Target(Model):

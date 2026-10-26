@@ -86,16 +86,37 @@ function error(message) {
   $("errorBanner").textContent = message;
   $("errorBanner").hidden = !message;
 }
+let busyActions = 0;
 async function action(fn) {
+  const button = document.activeElement?.closest("button");
+  if (button?.disabled) return;
+  const formButton = document.activeElement
+    ?.closest("form")
+    ?.querySelector('button:not([type="button"])');
+  const controls = [...new Set([button, formButton].filter(Boolean))];
+  const previous = controls.map((b) => b.disabled);
+  controls.forEach((b) => (b.disabled = true));
+  busyActions++;
+  if ($("dialogError")) $("dialogError").hidden = true;
   try {
     await fn();
   } catch (e) {
     toast(e.message);
+    if ($("dialog").open && $("dialogError")) {
+      $("dialogError").textContent = e.message;
+      $("dialogError").hidden = false;
+      $("dialogError").scrollIntoView({ block: "nearest" });
+    }
+  } finally {
+    busyActions--;
+    controls.forEach((b, i) => (b.disabled = previous[i]));
+    if (state && !busyActions) renderAccounts(true);
   }
 }
 function modal(title, html) {
   $("dialogTitle").textContent = title;
-  $("dialogBody").innerHTML = html;
+  $("dialogBody").innerHTML =
+    '<p id="dialogError" class="banner error" role="alert" hidden></p>' + html;
   $("dialog").showModal();
 }
 $("closeDialog").onclick = () => $("dialog").close();
@@ -119,7 +140,6 @@ function accountPayload(a) {
       "kind",
       "exchange",
       "capital",
-      "leverage",
       "auto",
       "allowed",
       "sizing",
@@ -524,20 +544,29 @@ $("reviewAI").onclick = () =>
       b.disabled = false;
     }
   });
-function renderAccounts() {
+function renderAccounts(force = false) {
+  if (
+    !force &&
+    (busyActions ||
+      $("accountCards").contains(document.activeElement) ||
+      $("positions").contains(document.activeElement))
+  )
+    return;
   const accounts = state.accounts;
-  $("accountCards").innerHTML = accounts
-    .map((a) => {
-      const s = a.summary || {};
-      return `<article class="card account-card"><div class="card-head"><div><p class="eyebrow">${exchangeName[a.exchange]} · ${kindName[a.kind]}</p><h2>${esc(a.name)}</h2></div><span class="badge ${a.auto ? "good" : a.kind === "live" ? "live" : ""}">${a.auto ? "自动交易运行中" : "已暂停"}</span></div><div class="account-numbers"><div><small>${a.kind === "paper" ? "模拟权益" : "账户权益"} / USDT</small><strong>${fmt(s.equity)}</strong></div><div><small>可用资金</small><strong>${fmt(s.available)}</strong></div><div><small>浮动盈亏</small><strong class="${Number(s.unrealized) >= 0 ? "positive" : "negative"}">${fmt(s.unrealized)}</strong></div></div><p class="account-state">${a.kind === "paper" ? "可评估全部监测品种；模拟 " + exchangeName[a.exchange] + " 账户" : "授权交易对：" + (a.allowed.map((id) => state.watchlist.find((i) => i.id === id)?.label || id).join("、") || "未选择")}<br>${esc(a.execution.reason)}${a.last_error ? '<br><span class="negative">' + esc(a.last_error) + "</span>" : ""}</p><div class="account-actions"><button class="${a.auto ? "secondary" : "primary"}" data-toggle-account="${a.id}">${a.auto ? "暂停自动交易" : "启用自动交易"}</button><button class="secondary" data-edit-account="${a.id}">账户设置</button>${a.kind === "paper" ? `<button class="text-button" data-reset-account="${a.id}">重置模拟资金</button>` : `<button class="secondary" data-account-key="${a.id}">API 密钥</button><button class="text-button" data-check-account="${a.id}">读取与核对</button>`}</div></article>`;
-    })
-    .join("");
+  $("accountCards").innerHTML =
+    accounts
+      .map((a) => {
+        const s = a.summary || {};
+        return `<article class="card account-card"><div class="card-head"><div><p class="eyebrow">${exchangeName[a.exchange]} · ${kindName[a.kind]}</p><h2>${esc(a.name)}</h2></div><span class="badge ${a.auto ? "good" : a.kind === "live" ? "live" : ""}">${a.auto ? "自动交易运行中" : "已暂停"}</span></div><div class="account-numbers"><div><small>${a.kind === "paper" ? "模拟权益" : "账户权益"} / USDT</small><strong>${fmt(s.equity)}</strong></div><div><small>可用资金</small><strong>${fmt(s.available)}</strong></div><div><small>浮动盈亏</small><strong class="${Number(s.unrealized) >= 0 ? "positive" : "negative"}">${fmt(s.unrealized)}</strong></div></div><p class="account-state">${a.kind === "paper" ? "可评估全部监测品种；模拟 " + exchangeName[a.exchange] + " 账户" : "授权交易对：" + (a.allowed.map((id) => state.watchlist.find((i) => i.id === id)?.label || id).join("、") || "未选择")}<br>${(a.sizing.some((x) => !x.quantity) || !a.sizing.length ? '<span class="negative">请先填写交易对币数量，再启用自动交易。</span><br>' : "") + esc(a.execution.reason)}${a.last_error ? '<br><span class="negative">' + esc(a.last_error) + "</span>" : ""}</p><div class="account-actions"><button class="${a.auto ? "secondary" : "primary"}" data-toggle-account="${a.id}">${a.auto ? "暂停自动交易" : "启用自动交易"}</button><button class="secondary" data-edit-account="${a.id}">账户设置</button>${a.kind === "paper" ? `<button class="text-button" data-reset-account="${a.id}">重置模拟资金</button>` : `<button class="secondary" data-account-key="${a.id}">API 密钥</button><button class="text-button" data-check-account="${a.id}">读取与核对</button>`}<button class="text-button negative" data-delete-account="${a.id}">删除账户</button></div></article>`;
+      })
+      .join("") ||
+    '<div class="card empty">尚无账户。点击“添加账户”创建模拟或交易所账户。</div>';
   $("positions").innerHTML =
     accounts
       .flatMap((a) =>
         (a.summary?.positions || []).map((p) => {
           const item = state.watchlist.find((i) => i.id === p.instrument_id);
-          return `<tr><td>${esc(a.name)}<small>${esc(item?.symbol || p.symbol)}</small></td><td>${directions[p.side] || esc(p.side)}<small>${fmt(p.qty ?? p.contracts, 6)}</small></td><td>${price(p.entry ?? p.entryPrice)}</td><td class="${Number(p.unrealized ?? p.unrealizedPnl) >= 0 ? "positive" : "negative"}">${fmt(p.unrealized ?? p.unrealizedPnl)}${p.price_verified === false ? "<small>行情待验证</small>" : ""}</td><td>${price(p.stop)}<small>强平 ${price(p.liquidation ?? p.liquidationPrice)}</small></td><td>${a.kind === "paper" ? `<button class="text-button" data-close-position="${a.id}" data-position="${esc(p.instrument_id)}">减仓 / 平仓</button>` : "交易所原生保护"}</td></tr>`;
+          return `<tr><td>${esc(a.name)}<small>${esc(item?.symbol || p.symbol)}</small></td><td>${directions[p.side] || esc(p.side)}<small>${fmt(p.qty ?? (p.contracts != null && p.contractSize != null ? p.contracts * p.contractSize : null), 8)}</small></td><td>${price(p.entry ?? p.entryPrice)}</td><td class="${Number(p.unrealized ?? p.unrealizedPnl) >= 0 ? "positive" : "negative"}">${fmt(p.unrealized ?? p.unrealizedPnl)}${p.price_verified === false ? "<small>行情待验证</small>" : ""}</td><td>${price(p.stop)}<small>强平 ${price(p.liquidation ?? p.liquidationPrice)}</small></td><td>${a.kind === "paper" ? `<button class="text-button" data-close-position="${a.id}" data-position="${esc(p.instrument_id)}">减仓 / 平仓</button>` : "交易所原生保护"}</td></tr>`;
         }),
       )
       .join("") ||
@@ -545,6 +574,24 @@ function renderAccounts() {
   bindAccounts();
 }
 function bindAccounts() {
+  document.querySelectorAll("[data-delete-account]").forEach(
+    (b) =>
+      (b.onclick = () => {
+        const a = state.accounts.find((x) => x.id === b.dataset.deleteAccount);
+        modal(
+          "删除账户",
+          `<p>删除 <b>${esc(a.name)}</b> 及其保存的 API 密钥？</p><div class="notice-box">历史交易记录会保留。须先暂停自动交易并处理平台管理的仓位及待核对订单。此操作不会替你平掉交易所外部仓位。</div><div class="dialog-footer"><button id="cancelDelete" class="secondary">取消</button><button id="confirmDeleteAccount" class="danger-outline">确认删除账户</button></div>`,
+        );
+        $("cancelDelete").onclick = () => $("dialog").close();
+        $("confirmDeleteAccount").onclick = () =>
+          action(async () => {
+            await api(`/api/v2/accounts/${a.id}`, {}, "DELETE");
+            $("dialog").close();
+            await refresh();
+            toast("账户及密钥已删除，历史记录已保留");
+          });
+      }),
+  );
   document.querySelectorAll("[data-toggle-account]").forEach(
     (b) =>
       (b.onclick = () =>
@@ -629,41 +676,90 @@ $("addAccount").onclick = () => editAccount();
 function editAccount(a) {
   modal(
     a ? "账户与仓位设置" : "添加一个账户",
-    `<form id="accountForm"><div class="form-grid"><label>账户名称<input name="name" maxlength="50" required value="${esc(a?.name || "")}"></label><label>账户类型<select name="kind" ${a ? "disabled" : ""}><option value="paper">本地模拟 · 不需要密钥</option><option value="demo">交易所测试 · 需要测试密钥</option><option value="live">真实账户 · 默认锁定执行</option></select></label><label>交易所 / 模拟成此交易所<select name="exchange" ${a ? "disabled" : ""}>${Object.keys(
+    `<form id="accountForm"><div class="form-grid"><label>账户名称<input name="name" maxlength="50" required value="${esc(a?.name || "")}" placeholder="例如：OKX 趋势账户"></label><label>账户类型<select name="kind" ${a ? "disabled" : ""}><option value="paper">本地模拟 · 虚拟资金</option><option value="demo">交易所测试 · 测试 API</option><option value="live">真实账户 · 交易所 API</option></select></label><label>交易所 / 模拟交易所<select name="exchange" ${a ? "disabled" : ""}>${Object.keys(
       exchangeName,
     )
       .map((x) => `<option value="${x}">${exchangeName[x]}</option>`)
       .join(
         "",
-      )}</select></label><label>初始模拟资金 / USDT<input name="capital" type="number" min="100" max="100000000" value="${a?.capital || 10000}" ${a ? "disabled" : ""}></label><label>最大杠杆<select name="leverage"><option value="1">1 倍</option><option value="2">2 倍</option><option value="3">3 倍</option></select></label></div><div class="notice-box">仓位金额指名义价值，不是保证金。固定模式严格按设定值开仓，风险额度不足时拒绝；最大模式由系统评估额度，含后续加仓。加仓比例基于初始仓位。留空由系统评估；填 0 禁止加仓。</div><h3>交易对授权与仓位</h3><div id="sizingRows"></div><div class="dialog-footer"><button class="primary">保存账户设置</button></div></form>`,
+      )}</select></label><label id="paperCapital">初始模拟资金 / USDT<input name="capital" type="number" min="100" max="100000000" step="any" value="${a?.capital || 10000}" ${a ? "disabled" : ""}></label></div><p id="accountKindHint" class="notice-box"></p><h3>逐交易对设置</h3><p class="muted small">仓位填写标的数量，例如 0.01 BTC。杠杆独立设置，风险偏好仍控制亏损及总敞口。未配置的品种不会自动开仓。</p><div id="sizingRows"></div><div class="dialog-footer"><button type="button" id="cancelAccount" class="secondary">取消</button><button class="primary">保存账户设置</button></div></form>`,
   );
-  const f = $("accountForm");
+  const f = $("accountForm"),
+    drafts = new Map();
   f.kind.value = a?.kind || "paper";
   f.exchange.value = a?.exchange || "binance";
-  f.leverage.value = a?.leverage || 1;
+  $("cancelAccount").onclick = () => $("dialog").close();
+  function readDrafts() {
+    document.querySelectorAll(".sizing-row").forEach((r) =>
+      drafts.set(r.dataset.sizeId, {
+        checked: r.querySelector(".allowed").checked,
+        mode: r.querySelector(".size-mode").value,
+        quantity: r.querySelector(".size-quantity").value,
+        leverage: r.querySelector(".size-leverage").value,
+        count: r.querySelector(".size-adds").value,
+        ratios: r.querySelector(".size-ratios").value,
+        open: r.querySelector("details").open,
+      }),
+    );
+  }
   function populate() {
+    const paper = f.kind.value === "paper";
+    $("paperCapital").hidden = !paper;
+    f.capital.disabled = !paper || !!a;
+    f.capital.required = paper;
+    $("accountKindHint").textContent = paper
+      ? "模拟资金仅在本地记账。可配置所有监测品种；合约杠杆规格按所选模拟交易所核验。"
+      : "真实 / 测试账户不需要填写模拟资金。保存后点击账户卡片的「API 密钥」连接交易所，再读取余额；自动下单默认关闭。";
     const items = state.watchlist.filter(
-      (i) => f.kind.value === "paper" || i.exchange === f.exchange.value,
+      (i) => paper || i.exchange === f.exchange.value,
     );
     $("sizingRows").innerHTML =
       items
         .map((i) => {
-          const s = a?.sizing.find((s) => s.instrument_id === i.id);
-          return `<div class="sizing-row" data-size-id="${i.id}"><label class="check"><input type="checkbox" class="allowed" ${f.kind.value === "paper" || a?.allowed.includes(i.id) ? "checked" : ""}>${esc(i.label)} · ${exchangeName[i.exchange]} <span class="muted small">${f.kind.value === "paper" ? "自定义此品种仓位" : "授权此品种自动交易"}</span></label><div class="sizing-grid"><label>仓位模式<select class="size-mode"><option value="maximum" ${s?.mode === "maximum" ? "selected" : ""}>最大名义仓位</option><option value="fixed" ${s?.mode === "fixed" ? "selected" : ""}>固定开仓金额</option></select></label><label>金额 / USDT<input class="size-amount" type="number" min="5" max="1000000" step="any" value="${s?.notional || 100}"></label><label>最多加仓次数<input class="size-adds" type="number" min="0" max="5" value="${s?.add_count ?? ""}" placeholder="自动评估"></label><label>每次比例，逗号分隔<input class="size-ratios" value="${esc(s?.add_ratios.join(",") || "")}" placeholder="例如 0.25,0.20"></label></div></div>`;
+          const setting = a?.sizing.find((x) => x.instrument_id === i.id);
+          const d = drafts.get(i.id) || {
+            checked: !!setting || !!a?.allowed.includes(i.id),
+            mode: setting?.mode || "maximum",
+            quantity: setting?.quantity ?? "",
+            leverage: setting?.leverage || 1,
+            count: setting?.add_count ?? "",
+            ratios:
+              setting?.add_ratios
+                .map((x) => Number((x * 100).toFixed(4)))
+                .join(", ") || "",
+            open: !!setting,
+          };
+          const unit = i.symbol.split("/")[0];
+          return `<div class="sizing-row" data-size-id="${i.id}"><label class="check"><input type="checkbox" class="allowed" ${d.checked ? "checked" : ""}><b>${esc(i.label)}</b><span class="muted small">${esc(i.symbol)} · ${paper ? "配置此品种" : "授权自动交易"}</span></label><details ${d.open ? "open" : ""}><summary>数量、杠杆与加仓</summary><div class="sizing-grid"><label>仓位模式<select class="size-mode"><option value="maximum" ${d.mode === "maximum" ? "selected" : ""}>最大总持仓数量</option><option value="fixed" ${d.mode === "fixed" ? "selected" : ""}>固定首次开仓数量</option></select></label><label>标的数量 / ${esc(unit)}<input class="size-quantity" type="number" min="0.00000001" max="1000000000" step="any" required value="${esc(d.quantity)}" placeholder="填写 ${esc(unit)} 数量"></label><label>此交易对杠杆 / 倍<input class="size-leverage" type="number" min="1" max="1000" step="1" required value="${esc(d.leverage)}"></label><div class="limit-control"><button type="button" class="secondary load-limits">读取交易所上限</button><small class="limit-note">尚未核验。高于 1 倍必须通过服务器校验。</small></div><label>最多加仓次数<input class="size-adds" type="number" min="0" max="5" step="1" value="${esc(d.count)}" placeholder="留空：系统评估；0：不加仓"></label><label>每次加仓比例 / %<input class="size-ratios" value="${esc(d.ratios)}" placeholder="例如 25, 20" inputmode="decimal"></label></div><p class="sizing-help">固定：每次初始开仓按填写数量，风控额度不足则不下单。最大：初始仓位由系统评估，后续加仓也不超过此总数量。<br><b>25, 20</b> 表示两次分别加「初始开仓数量」的 25% 和 20%。例如初始 0.01 BTC，对应 0.0025、0.002 BTC。不是剩余仓位的比例。次数和比例都留空时系统评估；只填次数时每次上限为初始数量的 25%；填 0 禁止加仓。</p></details></div>`;
         })
         .join("") ||
-      '<p class="muted">此交易所尚无监测品种，请先到监测列表添加。</p>';
+      '<p class="empty">此交易所尚无监测品种，请先在监测列表添加。</p>';
     document.querySelectorAll(".sizing-row").forEach((r) => {
-      const update = () =>
-        r
-          .querySelectorAll(".sizing-grid input,.sizing-grid select")
-          .forEach((x) => (x.disabled = !r.querySelector(".allowed").checked));
+      const update = () => {
+        const yes = r.querySelector(".allowed").checked;
+        r.querySelectorAll(
+          ".sizing-grid input,.sizing-grid select,.load-limits",
+        ).forEach((x) => (x.disabled = !yes));
+        if (yes) r.querySelector("details").open = true;
+      };
       r.querySelector(".allowed").onchange = update;
       update();
+      r.querySelector(".load-limits").onclick = () =>
+        action(async () => {
+          const note = r.querySelector(".limit-note");
+          note.textContent = "正在读取合约规格…";
+          const limits = await api(
+            `/api/v2/limits/${r.dataset.sizeId}?exchange=${f.exchange.value}&account_id=${encodeURIComponent(a?.id || "")}`,
+          );
+          r.querySelector(".size-leverage").max = limits.max_leverage;
+          note.textContent = `${limits.verified ? "最高 " + limits.max_leverage + " 倍。" : "暂只允许 1 倍。"}${limits.min_quantity ? "最小数量 " + limits.min_quantity + "。" : ""}${limits.quantity_step ? "数量步长 " + limits.quantity_step + "。" : ""}${limits.note}`;
+        });
     });
   }
-  f.kind.onchange = populate;
-  f.exchange.onchange = populate;
+  f.kind.onchange = f.exchange.onchange = () => {
+    readDrafts();
+    populate();
+  };
   populate();
   f.onsubmit = (e) => {
     e.preventDefault();
@@ -674,22 +770,37 @@ function editAccount(a) {
         if (!r.querySelector(".allowed").checked) return;
         allowed.push(r.dataset.sizeId);
         const count = r.querySelector(".size-adds").value,
-          ratios = r.querySelector(".size-ratios").value.trim();
+          input = r.querySelector(".size-ratios").value.trim();
+        const percentages = input
+          ? input.split(/[,，]/).map((x) => x.trim())
+          : [];
+        if (
+          percentages.some(
+            (x) =>
+              !x ||
+              !Number.isFinite(Number(x)) ||
+              Number(x) <= 0 ||
+              Number(x) > 100,
+          )
+        )
+          throw Error("加仓比例请填写 0 到 100 之间的百分数，例如 25, 20");
+        if (percentages.length && Number(count) !== percentages.length)
+          throw Error("加仓次数必须与比例个数一致，例如次数 2、比例 25, 20");
         sizing.push({
           instrument_id: r.dataset.sizeId,
           mode: r.querySelector(".size-mode").value,
-          notional: Number(r.querySelector(".size-amount").value),
+          quantity: Number(r.querySelector(".size-quantity").value),
+          leverage: Number(r.querySelector(".size-leverage").value),
           add_count: count === "" ? null : Number(count),
-          add_ratios: ratios ? ratios.split(/[,，]/).map(Number) : [],
+          add_ratios: percentages.map((x) => Number(x) / 100),
         });
       });
       await api("/api/v2/accounts", {
         id: a?.id || "",
-        name: f.elements.namedItem("name").value,
+        name: f.elements.namedItem("name").value.trim(),
         kind: f.kind.value,
         exchange: f.exchange.value,
-        capital: Number(f.capital.value),
-        leverage: Number(f.leverage.value),
+        capital: f.kind.value === "paper" ? Number(f.capital.value) : null,
         auto: a?.auto || false,
         allowed: f.kind.value === "paper" ? [] : allowed,
         sizing,
@@ -705,6 +816,8 @@ function accountKey(id) {
     "保存账户 API 密钥",
     `<p class="muted">密钥只在服务器加密保存，不回显。交易所测试账户必须使用测试环境密钥。</p><form id="accountKeyForm"><label>API Key<input name="api_key" type="password" autocomplete="off" required></label><label>API Secret<input name="secret" type="password" autocomplete="off" required></label><label>Passphrase（OKX 必填）<input name="passphrase" type="password" autocomplete="off"></label><button class="primary">加密保存</button></form>`,
   );
+  $("accountKeyForm").passphrase.required =
+    state.accounts.find((a) => a.id === id)?.exchange === "okx";
   $("accountKeyForm").onsubmit = (e) => {
     e.preventDefault();
     const f = e.currentTarget;
@@ -740,7 +853,15 @@ function resetAccount(id) {
   };
 }
 function renderOrders() {
-  const names = Object.fromEntries(state.accounts.map((a) => [a.id, a.name]));
+  const names = {
+    ...Object.fromEntries(
+      Object.entries(state.archived_accounts || {}).map(([id, name]) => [
+        id,
+        name + "（已删除）",
+      ]),
+    ),
+    ...Object.fromEntries(state.accounts.map((a) => [a.id, a.name])),
+  };
   $("orderRows").innerHTML =
     state.orders
       .map(
@@ -849,10 +970,21 @@ function fillSettings() {
   if (!state) return;
   const f = $("aiForm");
   f.model.value = state.preferences.ai_model;
+  f.modelMode.value = "custom";
+  toggleModelMode();
+  if (state.ai_key_saved && !modelLoaded) loadModels(false);
   f.interval.value = state.preferences.ai_interval;
   f.enabled.checked = state.preferences.ai_enabled;
   f.intervene.checked = state.preferences.ai_intervene;
   $("openaiSaved").textContent = state.ai_key_saved ? "已保存" : "未配置";
+  document
+    .querySelectorAll("[data-delete-key]")
+    .forEach(
+      (b) =>
+        (b.disabled = !(b.dataset.deleteKey === "openai"
+          ? state.ai_key_saved
+          : state.providers[b.dataset.deleteKey])),
+    );
   for (const p of ["coinglass", "finnhub"])
     $(p + "Saved").textContent = state.providers[p] ? "已保存" : "未配置";
   $("evidenceForm").instrument.innerHTML = state.watchlist
@@ -870,7 +1002,10 @@ $("aiForm").onsubmit = (e) => {
       "/api/v2/preferences",
       {
         ...state.preferences,
-        ai_model: f.model.value.trim(),
+        ai_model:
+          f.modelMode.value === "list"
+            ? f.modelList.value
+            : f.model.value.trim(),
         ai_interval: Number(f.interval.value),
         ai_enabled: f.enabled.checked,
         ai_intervene: f.intervene.checked,
@@ -892,7 +1027,9 @@ document.querySelectorAll(".key-form").forEach(
         f.reset();
         toast("密钥已加密保存");
         await refresh();
-        fillSettings();
+        modelLoaded = false;
+        updateKeyStatus();
+        if (f.dataset.provider === "openai") await loadModels(true);
       });
     }),
 );
@@ -915,6 +1052,89 @@ $("evidenceForm").onsubmit = (e) => {
     toast("披露信息已保存，等待重新评估");
   });
 };
+let modelLoaded = false;
+function toggleModelMode() {
+  const list = $("aiForm").modelMode.value === "list";
+  $("modelListLabel").hidden = !list;
+  $("modelCustomLabel").hidden = list;
+  $("aiForm").modelList.disabled = !list;
+  $("aiForm").model.disabled = list;
+}
+async function loadModels(selectList = true) {
+  const button = $("loadModels");
+  if (button.disabled) return;
+  button.disabled = true;
+  $("modelMessage").textContent = "正在从 API 读取模型…";
+  const f = $("aiForm"),
+    current =
+      f.modelMode.value === "list" ? f.modelList.value : f.model.value.trim();
+  try {
+    const result = await api("/api/v2/models");
+    modelLoaded = true;
+    f.modelList.innerHTML =
+      '<option value="">请选择模型</option>' +
+      result.models
+        .map((id) => `<option value="${esc(id)}">${esc(id)}</option>`)
+        .join("");
+    f.modelList.value = result.models.includes(current) ? current : "";
+    if (selectList || result.models.includes(current))
+      f.modelMode.value = "list";
+    $("modelMessage").textContent = result.note;
+  } catch (e) {
+    f.modelMode.value = "custom";
+    $("modelMessage").textContent = e.message + "。已切换为自定义填写。";
+  } finally {
+    button.disabled = false;
+    toggleModelMode();
+  }
+}
+$("aiForm").modelMode.onchange = toggleModelMode;
+$("loadModels").onclick = () => loadModels();
+function updateKeyStatus() {
+  $("openaiSaved").textContent = state.ai_key_saved ? "已保存" : "未配置";
+  for (const p of ["coinglass", "finnhub"])
+    $(p + "Saved").textContent = state.providers[p]
+      ? "已保存"
+      : "未配置 · 使用公开来源";
+  document
+    .querySelectorAll("[data-delete-key]")
+    .forEach(
+      (b) =>
+        (b.disabled = !(b.dataset.deleteKey === "openai"
+          ? state.ai_key_saved
+          : state.providers[b.dataset.deleteKey])),
+    );
+}
+document.querySelectorAll("[data-delete-key]").forEach(
+  (b) =>
+    (b.onclick = () => {
+      const provider = b.dataset.deleteKey;
+      modal(
+        "删除 API 密钥",
+        `<p>确认删除 ${esc(provider)} 的服务器端密钥？</p><p class="muted">${provider === "openai" ? "删除后关闭 AI 复核与 AI 干预。" : "删除后仅保留可用的公开数据来源。"}已有订单保护继续运行。</p><div class="dialog-footer"><button class="secondary" id="cancelKeyDelete">取消</button><button class="danger-outline" id="confirmKeyDelete">确认删除密钥</button></div>`,
+      );
+      $("cancelKeyDelete").onclick = () => $("dialog").close();
+      $("confirmKeyDelete").onclick = () =>
+        action(async () => {
+          await api("/api/v2/keys/" + provider, {}, "DELETE");
+          $("dialog").close();
+          await refresh();
+          updateKeyStatus();
+          if (provider === "openai") {
+            modelLoaded = false;
+            $("aiForm").enabled.checked = false;
+            $("aiForm").intervene.checked = false;
+            $("aiForm").modelList.innerHTML =
+              '<option value="">请先保存密钥再获取</option>';
+            $("aiForm").modelMode.value = "custom";
+            toggleModelMode();
+            $("modelMessage").textContent =
+              "密钥已删除；可自定义填写模型 ID，保存新密钥后再启用。";
+          }
+          toast("API 密钥已删除");
+        });
+    }),
+);
 $("help").onclick = () =>
   modal(
     "从这里开始",

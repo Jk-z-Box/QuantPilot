@@ -104,26 +104,27 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
     price = D(q["ask"] if side == "long" else q["bid"]) * (1 + SLIP if side == "long" else 1 - SLIP)
     if not adding and not D(plan["entry_low"]) * D(".999") <= price <= D(plan["entry_high"]) * D("1.001"):
         raise ValueError("价格已离开入场区间")
-    leverage = min(account["leverage"], rule["leverage"])
+    sizing = next((s for s in account["sizing"] if s["instrument_id"] == key), None)
+    if not sizing or not sizing.get("quantity"):
+        raise ValueError("请先为此交易对设置币数量和杠杆")
+    leverage = sizing["leverage"]
     old = book["positions"].get(key)
+    if old and leverage != old["leverage"]:
+        raise ValueError("持仓期间不能更改该交易对杠杆")
     if old and old["side"] != side:
         raise ValueError("不能将相反方向的机会用于加仓")
     stop = D(old["stop"] if adding and old else plan["stop"])
     distance = (price - stop) * (1 if side == "long" else -1)
     if distance <= 0:
         raise ValueError("止损方向无效")
-    sizing = next(
-        (s for s in account["sizing"] if s["instrument_id"] == key),
-        {"mode": "maximum", "notional": 100, "add_count": None, "add_ratios": []},
-    )
     add_count = sizing["add_count"] if sizing["add_count"] is not None else rule["adds"]
     ratios = sizing["add_ratios"] or [0.25] * add_count
     cap = (
-        D(sizing["notional"]) * (1 + sum(map(D, ratios)))
+        D(sizing["quantity"]) * (1 + sum(map(D, ratios)))
         if sizing["mode"] == "fixed"
-        else D(sizing["notional"])
+        else D(sizing["quantity"])
     )
-    existing = D(old["qty"]) * (D(old["entry"]) if sizing["mode"] == "fixed" else price) if old else D(0)
+    existing = D(old["qty"]) if old else D(0)
     risk_used = sum(
         max(D(0), (D(p["entry"]) - D(p["stop"])) * (1 if p["side"] == "long" else -1)) * D(p["qty"])
         for p in book["positions"].values()
@@ -136,20 +137,22 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
         if instruments.get(k, {}).get("group") == item["group"]
     )
     headroom = min(
-        cap - existing,
+        (cap - existing) * price,
         equity * D(rule["exposure"]) - D(snap["exposure"]),
         equity * D(rule["exposure"]) * D(".75") - correlated,
         free * leverage * D(".95"),
         risk_amount,
     )
     # Reserve room for planned additions when the user sets a total maximum.
-    target = D(sizing["notional"])
+    target = D(sizing["quantity"]) * price
     if sizing["mode"] == "maximum" and ratios:
         target /= 1 + sum(map(D, ratios))
     if adding:
         if not old or old["adds"] >= add_count or old["tp_done"] or opportunity["score"] < 85:
             raise ValueError("未满足加仓条件")
-        target = D(old["initial_notional"]) * D(ratios[old["adds"]])
+        if not old.get("initial_qty"):
+            raise ValueError("旧仓位缺少初始币数量，不允许自动加仓")
+        target = D(old["initial_qty"]) * D(ratios[old["adds"]]) * price
         if price * (1 if side == "long" else -1) <= D(old["entry"]) * (1 if side == "long" else -1):
             raise ValueError("不允许亏损加仓")
     elif old:
@@ -173,7 +176,9 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
         raise ValueError("止损距离预估强平线过近")
     return {
         "notional": amount,
-        "qty": (amount / price).quantize(D(".00000001"), rounding="ROUND_DOWN"),
+        "qty": amount / price
+        if sizing["mode"] == "fixed"
+        else (amount / price).quantize(D(".00000001"), rounding="ROUND_DOWN"),
         "price": price,
         "stop": stop,
         "leverage": leverage,
@@ -237,6 +242,7 @@ class PaperBroker:
                     "tp_done": [],
                     "risk_reduced": False,
                     "initial_notional": str(qty * price),
+                    "initial_qty": str(qty),
                     "opened_at": now,
                     "signal_id": opportunity["id"],
                     "funding_at": int(now // 28800) * 28800,
