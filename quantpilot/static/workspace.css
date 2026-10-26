@@ -1395,3 +1395,7 @@ details summary {
   height: auto;
   border-radius: 8px;
 }
+
+.market-search {
+  margin-top: 15px;
+}

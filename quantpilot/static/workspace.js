@@ -295,10 +295,15 @@ function renderOpportunity() {
     ? o.breakdown
         .map(
           (b) =>
-            `<div class="factor-row"><div><span>${esc(b.name)}</span><b>${b.available ? b.points + " / " + b.max : "缺失"}</b></div><div class="factor-track"><span style="width:${(b.points / b.max) * 100}%"></span></div></div>`,
+            `<div class="factor-row"><div><span>${esc(b.name)}</span><b>${b.available ? b.points + " / " + b.max : "缺失"}</b></div><div class="factor-track"><span data-width="${(b.points / b.max) * 100}"></span></div></div>`,
         )
         .join("")
     : '<div class="empty">等待可验证的数据</div>';
+  $("scoreDetails")
+    .querySelectorAll("[data-width]")
+    .forEach((el) => {
+      el.style.width = el.dataset.width + "%";
+    });
   $("trendRow").innerHTML = ["1w", "1d", "4h", "1h"]
     .map((f, n) => {
       const s = o?.indicators?.[f];
@@ -765,7 +770,7 @@ $("editWatch").onclick = () => {
   let draft = structuredClone(state.watchlist);
   modal(
     "管理监测列表",
-    `<p class="muted">输入交易所的统一合约名称，例如 BTC/USDT:USDT。可以编辑名称、交易所或添加其他品种。</p><div id="watchEditor"></div><button id="appendWatch" class="text-button">＋ 添加一个交易对</button><details style="margin-top:15px"><summary>查找交易所支持的永续合约</summary><div class="form-grid"><label>交易所<select id="searchExchange">${Object.keys(
+    `<p class="muted">输入交易所的统一合约名称，例如 BTC/USDT:USDT。可以编辑名称、交易所或添加其他品种。</p><div id="watchEditor"></div><button id="appendWatch" class="text-button">＋ 添加一个交易对</button><details class="market-search"><summary>查找交易所支持的永续合约</summary><div class="form-grid"><label>交易所<select id="searchExchange">${Object.keys(
       exchangeName,
     )
       .map((x) => `<option value="${x}">${exchangeName[x]}</option>`)
