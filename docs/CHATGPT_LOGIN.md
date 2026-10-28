@@ -108,3 +108,5 @@ OAuth 使用 PKCE S256、随机 state/nonce、RS256/JWKS 校验签名、issuer/a
 固定 Codex 0.165.0 已不接受旧的 `readOnly.access`。服务使用命名的 `quantpilot` 权限配置；启动和每次复核均明确选用该配置，并检查返回的 `activePermissionProfile`。只开放空工作目录的读取权限，命令网络关闭。为使用此官方协议字段，连接声明 `experimentalApi`，并不因此授予任何工具执行权限。
 
 安装器提供同版本、经 SHA-256 验证的 `codex-resources/bwrap`，并在切换发布目录前运行 `scripts/check-codex-protocol.py`。验收使用全新的临时 CODEX_HOME，不加载用户登录，实际启动线程、提交相同结构的回合并立即中断。用户的官方登录会保留，不需要因升级重新授权。
+
+检查由 `scripts/check-codex-service.py` 放在临时 systemd 单元内执行，采用正式服务的用户、目录隔离和系统调用限制，不共享或删除正式 Unix socket。bubblewrap 使用的本机 `AF_NETLINK` 已显式允许；不授予主机网络管理权限，不开放公网端口，也不改变分析会话的命令网络禁用状态。

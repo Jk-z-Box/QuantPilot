@@ -33,14 +33,15 @@ class ProbeProtocol(Protocol):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", default="/opt/quantpilot/codex/0.165.0/codex")
+    parser.add_argument("--cwd", type=Path)
     args = parser.parse_args()
     version = subprocess.check_output([args.binary, "--version"], text=True).strip()  # noqa: S603
     if version != "codex-cli 0.165.0":
         raise SystemExit("Protocol acceptance must use the pinned Codex 0.165.0 binary")
     with tempfile.TemporaryDirectory(prefix="qp-protocol-") as temporary:
         home = Path(temporary)
-        cwd = home / "empty"
-        cwd.mkdir(mode=0o700)
+        cwd = args.cwd or home / "empty"
+        cwd.mkdir(mode=0o700, exist_ok=True)
         broker = Broker(cwd, lambda notify: ProbeProtocol(args.binary, home, cwd, notify))
         try:
             broker.response(

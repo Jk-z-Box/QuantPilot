@@ -24,7 +24,8 @@ ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# Bubblewrap needs local NETLINK_ROUTE to bring up loopback inside its private network namespace.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 ReadWritePaths=/var/lib/quantpilot-ai /run/quantpilot-ai
 InaccessiblePaths=/var/lib/quantpilot -/etc/quantpilot
 CapabilityBoundingSet=

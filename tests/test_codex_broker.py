@@ -318,6 +318,7 @@ def test_deployment_isolation_and_integrity():
     unit = Path("scripts/quantpilot-ai.service").read_text()
     assert "User=quantpilot-ai" in unit and "InaccessiblePaths=/var/lib/quantpilot" in unit
     assert "ProtectSystem=strict" in unit and "UMask=0077" in unit
+    assert "AF_NETLINK" in unit and "CapabilityBoundingSet=\n" in unit
     script = Path("scripts/install-codex.sh").read_text()
     assert "sha256sum --check --status" in script and "0.165.0" in script
     assert "--version" in script
@@ -401,3 +402,18 @@ def test_sandbox_failures_are_actionable_and_redacted(message):
     error = classify({"code": -32603, "message": message})
     assert error.kind == "codex_sandbox"
     assert "SECRET" not in json.dumps(error.public())
+
+
+def test_service_acceptance_preserves_isolation_without_owning_live_socket():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("service_check", "scripts/check-codex-service.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    args = module.command(Path("scripts"), "/example/python")
+    assert "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK" in args
+    assert "CapabilityBoundingSet=" in args
+    assert "NoNewPrivileges=true" in args
+    assert "InaccessiblePaths=/var/lib/quantpilot -/etc/quantpilot" in args
+    assert "ReadWritePaths=/var/lib/quantpilot-ai -/run/quantpilot-ai" in args
+    assert not any(arg.startswith("RuntimeDirectory=") for arg in args)
