@@ -50,8 +50,12 @@ def install(app, workspace, session, mutation):
         return workspace.state()
 
     @app.get("/api/v2/models", dependencies=[Depends(session)])
-    def models(provider: Literal["api_key", "chatgpt"] = "api_key"):
+    def models(provider: Literal["api_key", "chatgpt", "codex"] = "api_key"):
         return safe(lambda: list_models(workspace.vault, provider=provider))
+
+    @app.post("/api/v2/codex/{action}", dependencies=[Depends(mutation)])
+    def codex_action(action: Literal["login", "cancel", "logout", "activate"]):
+        return safe(workspace.codex_action, action)
 
     @app.post("/api/v2/chatgpt/pair", dependencies=[Depends(mutation)])
     def start_pair(body: ChatGPTProfile):

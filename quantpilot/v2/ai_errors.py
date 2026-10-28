@@ -3,6 +3,25 @@
 from __future__ import annotations
 
 MESSAGES = {
+    "codex_unavailable": (
+        "服务器 AI 服务未就绪",
+        "请检查 quantpilot-ai 服务状态，或重试连接。不会改用 API Key。",
+    ),
+    "codex_failed": (
+        "Codex 请求未完成",
+        "官方服务未返回可采用的完整结果，请稍后重试；已有仓位保护继续运行。",
+    ),
+    "codex_busy": ("服务器 AI 正在处理请求", "请等待当前复核或登录操作结束后重试。"),
+    "codex_limit": (
+        "Codex 用量受限",
+        "当前 ChatGPT/Codex 用量已达限制，请在 ChatGPT 检查用量，恢复后重试。不会扣 API Key 余额。",
+    ),
+    "codex_permission": (
+        "设备授权未完成",
+        "请在 ChatGPT 设置 → 安全中开启 Codex 设备码授权，然后重新生成授权码；工作区账户可能需管理员允许。",
+    ),
+    "codex_expired": ("设备授权码已失效", "本次授权已结束，请重新生成授权码。"),
+    "codex_connected": ("服务器已连接 ChatGPT", "如需更换账户，请先断开当前服务器连接。"),
     "balance": (
         "API 余额不足",
         "OpenAI API 可用额度已用完或尚未充值。ChatGPT Plus 订阅不抵扣本平台的 API 调用费用，请检查该密钥所属组织的余额与账单。",

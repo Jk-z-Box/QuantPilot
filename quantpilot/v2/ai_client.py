@@ -11,9 +11,12 @@ import httpx
 
 from .ai_errors import AIError, http_error
 from .chatgpt import ChatGPTConnection
+from .codex_client import CodexConnection
 
 
 def fingerprint(preferences, vault):
+    if preferences.get("ai_provider") == "codex":
+        return CodexConnection().fingerprint()
     if preferences.get("ai_provider", "api_key") == "chatgpt":
         return ("chatgpt", *ChatGPTConnection(vault).fingerprint())
     key = (vault.get("v2:ai:openai") or {}).get("apiKey", "")
@@ -21,6 +24,8 @@ def fingerprint(preferences, vault):
 
 
 def credential(preferences, vault, transport=None):
+    if preferences.get("ai_provider") == "codex":
+        raise AIError("parameters")
     if preferences.get("ai_provider", "api_key") == "chatgpt":
         auth = ChatGPTConnection(vault, transport)
         return auth.access(), auth
@@ -31,6 +36,8 @@ def credential(preferences, vault, transport=None):
 
 
 def ready(preferences, vault):
+    if preferences.get("ai_provider") == "codex":
+        return CodexConnection().status()["ready"]
     if preferences.get("ai_provider", "api_key") == "chatgpt":
         return ChatGPTConnection(vault).status()["ready"]
     return bool((vault.get("v2:ai:openai") or {}).get("apiKey"))
@@ -65,6 +72,8 @@ def stream_response(response, deadline):
 
 
 def response(preferences, vault, payload, transport=None, timeout=45):
+    if preferences.get("ai_provider") == "codex":
+        return CodexConnection(transport).response(payload)
     token, auth = credential(preferences, vault, transport)
     context = auth.fingerprint() if auth else None
     body = copy.deepcopy(payload)

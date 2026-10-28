@@ -73,7 +73,7 @@
           </div>
           <a href="/legacy" class="legacy">旧版模拟账本 ↗</a
           ><button id="logout" class="text-button">退出登录</button
-          ><small>QUANTPILOT 0.3</small>
+          ><small>QUANTPILOT 0.4</small>
         </div>
       </aside>
       <div class="main">
@@ -356,13 +356,99 @@
                       form="aiForm"
                       name="provider"
                     >
+                      <option value="codex">
+                        Continue with ChatGPT · 服务器登录
+                      </option>
                       <option value="api_key">API Key · 独立计费</option>
                       <option value="chatgpt">
-                        OpenAI 官方登录授权 · ChatGPT 计划
+                        旧版官方授权 · 本机登录助手
                       </option>
                     </select></label
                   >
                   <p id="aiProviderHint" class="small muted"></p>
+                  <div id="codexPanel" hidden>
+                    <div class="section-line">
+                      <strong>服务器 ChatGPT 连接</strong
+                      ><span id="codexBadge" class="badge">未连接</span>
+                    </div>
+                    <p class="small muted">
+                      无需终端或本机助手。服务器负责登录状态和后续调用，你只需在
+                      OpenAI 官方页面确认一次。
+                    </p>
+                    <div class="connection-actions">
+                      <button type="button" id="codexLogin" class="primary">
+                        Continue with ChatGPT
+                      </button>
+                      <button
+                        type="button"
+                        id="codexUse"
+                        class="secondary"
+                        hidden
+                      >
+                        使用此连接
+                      </button>
+                      <button
+                        type="button"
+                        id="codexLogout"
+                        class="danger-outline"
+                        hidden
+                      >
+                        断开连接
+                      </button>
+                    </div>
+                    <div
+                      id="codexDevice"
+                      class="device-card"
+                      hidden
+                      aria-live="polite"
+                    >
+                      <p><strong>1. 复制一次性授权码</strong></p>
+                      <div class="device-code-row">
+                        <input
+                          id="codexCode"
+                          readonly
+                          autocomplete="off"
+                          aria-label="一次性设备授权码"
+                        /><button
+                          id="codexCopy"
+                          type="button"
+                          class="secondary"
+                        >
+                          复制
+                        </button>
+                      </div>
+                      <p><strong>2. 在 OpenAI 官方页面完成授权</strong></p>
+                      <a
+                        href="https://auth.openai.com/codex/device"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="device-link"
+                        >打开官方授权页面 ↗</a
+                      >
+                      <p class="small muted">
+                        输入上方代码，并确认登录的是你自己的 ChatGPT
+                        账户。完成后返回这里，系统会自动识别。
+                      </p>
+                      <div class="connection-actions">
+                        <span id="codexProgress" role="status"
+                          >正在等待官方授权…</span
+                        ><button
+                          id="codexCancel"
+                          type="button"
+                          class="text-button"
+                        >
+                          取消本次登录
+                        </button>
+                      </div>
+                    </div>
+                    <p id="codexMessage" class="small muted" role="status"></p>
+                    <p class="fine">
+                      若官方页面要求开启设备码登录，请到 ChatGPT「设置 →
+                      安全」开启后重试。调用使用 ChatGPT/Codex
+                      额度；可用模型和额度以官方实际返回为准，不会自动切换到 API
+                      Key。授权成功后仍需选择模型、保存 AI 设置。
+                    </p>
+                  </div>
                   <div id="chatgptPanel" hidden>
                     <div class="section-line">
                       <strong>ChatGPT 连接</strong

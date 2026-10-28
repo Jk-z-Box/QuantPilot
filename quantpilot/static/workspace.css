@@ -1681,3 +1681,43 @@ dialog[open] {
   margin: 8px 0;
   font-family: monospace;
 }
+
+.device-card {
+  margin-top: 20px;
+  padding: 20px;
+  border: 1px solid var(--line, #d8e5df);
+  border-radius: 12px;
+  background: #f4f9f6;
+}
+.device-code-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  max-width: 440px;
+}
+.device-code-row input {
+  font:
+    700 1.35rem ui-monospace,
+    monospace;
+  letter-spacing: 0.14em;
+  min-width: 0;
+}
+.device-link {
+  display: inline-block;
+  padding: 10px 0;
+  font-weight: 600;
+}
+#codexMessage {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 520px) {
+  .device-card {
+    padding: 14px;
+  }
+  .device-code-row {
+    gap: 8px;
+  }
+  .device-code-row input {
+    font-size: 1.1rem;
+  }
+}

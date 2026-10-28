@@ -66,7 +66,7 @@ def defaults():
 class Preferences(Model):
     profile: Literal["conservative", "balanced", "aggressive"] = "balanced"
     min_score: int = Field(default=80, ge=1, le=100, strict=True)
-    ai_provider: Literal["api_key", "chatgpt"] = "api_key"
+    ai_provider: Literal["api_key", "chatgpt", "codex"] = "api_key"
     ai_enabled: bool = False
     ai_model: str = Field(default="", max_length=100, pattern=r"^[a-zA-Z0-9_.:-]*$")
     ai_interval: int = Field(default=300, ge=60, le=3600)

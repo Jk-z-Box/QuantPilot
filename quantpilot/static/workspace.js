@@ -261,6 +261,7 @@ function render() {
   $("aiErrorMessage").textContent = failure?.message || "";
   errorAction("aiErrorAction", failure);
   renderChatGPT();
+  renderCodex();
   $("aiErrorCode").textContent = failure
     ? [
         failure.http_status ? `HTTP ${failure.http_status}` : "",
@@ -1030,7 +1031,11 @@ $("editWatch").onclick = () => {
 };
 let chatgptPairBaseline = null;
 function connectionReady(provider) {
-  return provider === "chatgpt" ? state.chatgpt?.ready : state.ai_key_saved;
+  return provider === "codex"
+    ? state.codex?.ready
+    : provider === "chatgpt"
+      ? state.chatgpt?.ready
+      : state.ai_key_saved;
 }
 function errorAction(id, error) {
   const link = $(id),
@@ -1047,12 +1052,130 @@ function errorAction(id, error) {
 function toggleProvider() {
   const official = $("aiProvider").value === "chatgpt";
   $("chatgptPanel").hidden = !official;
-  $("openaiKeyForm").hidden = official;
-  $("aiProviderHint").textContent = official
-    ? "使用获准共享的 ChatGPT 计划额度。Plus 用量与其他应用共享；不会自动切换到 API Key。"
-    : "使用 OpenAI API 余额，账单与 ChatGPT Plus 订阅分开。";
+  $("codexPanel").hidden = $("aiProvider").value !== "codex";
+  $("openaiKeyForm").hidden = $("aiProvider").value !== "api_key";
+  $("aiProviderHint").textContent =
+    $("aiProvider").value === "codex"
+      ? "设备授权在服务器完成，使用官方 Codex 调用通道。无需复制 API Key 或本机凭据。"
+      : official
+        ? "使用获准共享的 ChatGPT 计划额度。Plus 用量与其他应用共享；不会自动切换到 API Key。"
+        : "使用 OpenAI API 余额，账单与 ChatGPT Plus 订阅分开。";
   renderChatGPT();
+  renderCodex();
 }
+let deviceAttempt = null;
+let activatingCodex = false;
+function clearDevice() {
+  deviceAttempt = null;
+  $("codexCode").value = "";
+  $("codexDevice").hidden = true;
+}
+function renderCodex() {
+  const c = state?.codex;
+  if (!c) return;
+  $("codexBadge").textContent = c.ready
+    ? "已登录" + (c.plan ? " · " + c.plan : "")
+    : c.pending
+      ? "等待授权"
+      : c.available
+        ? "未连接"
+        : "服务未就绪";
+  $("codexBadge").className = "badge" + (c.ready ? " good" : "");
+  $("codexLogin").hidden = c.ready || !!deviceAttempt;
+  $("codexLogin").disabled = !!deviceAttempt || !c.available;
+  $("codexLogout").hidden = !c.ready;
+  $("codexUse").hidden = !c.ready || state.preferences.ai_provider === "codex";
+  if (!deviceAttempt)
+    $("codexMessage").textContent =
+      c.error?.message ||
+      (c.ready
+        ? "连接已就绪，请获取模型并保存设置。"
+        : c.pending
+          ? "服务器正在等待授权，点击 Continue with ChatGPT 可重新显示当前授权码。"
+          : c.available
+            ? "点击上方按钮开始登录。"
+            : "服务器 AI 服务暂不可用，请使用 qp ai-status 检查。");
+  if (deviceAttempt && c.ready && !activatingCodex) {
+    if ($("aiProvider").value !== "codex") {
+      clearDevice();
+      toast("服务器 ChatGPT 已登录，可选择服务器登录方式并使用此连接");
+      return;
+    }
+    activatingCodex = true;
+    api("/api/v2/codex/activate", {})
+      .then(async () => {
+        clearDevice();
+        modelLoaded = false;
+        await refresh();
+        fillSettings();
+        toast("ChatGPT 已连接。请选择模型并保存 AI 设置；自动交易已暂停");
+      })
+      .catch((e) => {
+        clearDevice();
+        toast(e.message);
+      })
+      .finally(() => {
+        activatingCodex = false;
+      });
+  } else if (
+    deviceAttempt &&
+    (!c.available || c.error || Date.now() / 1000 >= deviceAttempt.expires_at)
+  ) {
+    clearDevice();
+    $("codexMessage").textContent =
+      c.error?.message || "授权码已失效，请重新生成。";
+  }
+}
+$("codexLogin").onclick = () =>
+  action(async () => {
+    const result = await api("/api/v2/codex/login", {});
+    deviceAttempt = result;
+    $("codexCode").value = result.user_code;
+    $("codexDevice").hidden = false;
+    $("codexMessage").textContent =
+      "请在 10 分钟内完成授权，仅在官方页面输入此代码。";
+    await refresh();
+  });
+$("codexCopy").onclick = () =>
+  action(async () => {
+    try {
+      await navigator.clipboard.writeText($("codexCode").value);
+      toast("授权码已复制");
+    } catch {
+      $("codexCode").select();
+      toast("请手动复制选中的授权码");
+    }
+  });
+$("codexCancel").onclick = () =>
+  action(async () => {
+    await api("/api/v2/codex/cancel", {});
+    clearDevice();
+    await refresh();
+  });
+$("codexUse").onclick = () =>
+  action(async () => {
+    await api("/api/v2/codex/activate", {});
+    modelLoaded = false;
+    await refresh();
+    fillSettings();
+    toast("连接已切换，请选择模型；自动交易已暂停");
+  });
+$("codexLogout").onclick = () => {
+  if (
+    !confirm(
+      "断开服务器的 ChatGPT 登录？相关 AI 自动任务和账户自动交易将暂停，已有仓位保护继续运行。",
+    )
+  )
+    return;
+  action(async () => {
+    await api("/api/v2/codex/logout", {});
+    clearDevice();
+    modelLoaded = false;
+    await refresh();
+    fillSettings();
+    toast("服务器 ChatGPT 连接已断开");
+  });
+};
 function renderChatGPT() {
   if (!state?.chatgpt) return;
   const c = state.chatgpt,

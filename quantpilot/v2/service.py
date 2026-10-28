@@ -12,6 +12,7 @@ from .ai import apply_revision, review
 from .ai_client import fingerprint, ready
 from .ai_errors import AIError
 from .chatgpt import ChatGPTConnection
+from .codex_client import CodexConnection
 from .execution import ExchangeBroker
 from .feeds import Feeds
 from .limits import contract_limits
@@ -71,7 +72,33 @@ class Workspace:
             self.store.write(db, "v2_accounts", accounts)
             self.store.write(db, "v2_sizing_migration", migrated)
         self.chatgpt = ChatGPTConnection(vault)
+        self.codex = CodexConnection()
         self.research = ResearchEngine(self)
+
+    def codex_action(self, action):
+        if action == "activate":
+            if not self.codex.status()["ready"]:
+                raise ValueError("请先完成官方设备码授权")
+            result = {"ready": True}
+        else:
+            if action not in ("login", "cancel", "logout"):
+                raise ValueError("无效的连接操作")
+            result = self.codex.call(action)
+        # A new identity must never inherit enabled automated trading or AI tasks.
+        with self.store.transaction() as db:
+            prefs = self.store.read(db, "v2_preferences")
+            if action == "activate" or prefs["ai_provider"] == "codex":
+                if action == "activate":
+                    prefs["ai_provider"] = "codex"
+                prefs.update(ai_enabled=False, ai_intervene=False, ai_data_enabled=False, ai_model="")
+                self.store.write(db, "v2_preferences", prefs)
+            accounts = self.store.read(db, "v2_accounts")
+            for account in accounts.values():
+                account["auto"] = False
+            self.store.write(db, "v2_accounts", accounts)
+            self.store.audit(db, "codex_connection_changed", {"action": action})
+        self.auth_changed()
+        return result
 
     def auth_changed(self):
         with self.lock:
@@ -609,7 +636,7 @@ class Workspace:
                 for r in db.execute("SELECT * FROM v2_orders ORDER BY created DESC LIMIT 100")
             ]
         return {
-            "version": "0.3.0",
+            "version": "0.4.0",
             "now": now,
             "demo": self.market.demo,
             "watchlist": self.store.get("v2_watchlist"),
@@ -628,6 +655,7 @@ class Workspace:
             "last_evaluation": self.last_evaluation,
             "providers": {name: bool(self.vault.get("v2:feed:" + name)) for name in ("coinglass", "finnhub")},
             "chatgpt": self.chatgpt.status(),
+            "codex": self.codex.status(),
             "ai_key_saved": bool(self.vault.get("v2:ai:openai")),
         }
 

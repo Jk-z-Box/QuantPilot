@@ -10,10 +10,13 @@ from pydantic import Field, model_validator
 from .ai_client import credential
 from .ai_client import response as request_response
 from .ai_errors import AIError, http_error
+from .codex_client import CodexConnection
 from .models import PROFILES, Model
 
 
 def list_models(vault, transport=None, provider="api_key"):
+    if provider == "codex":
+        return CodexConnection(transport).call("models")
     token, auth = credential({"ai_provider": provider}, vault, transport)
     context = auth.fingerprint() if auth else None
     try:

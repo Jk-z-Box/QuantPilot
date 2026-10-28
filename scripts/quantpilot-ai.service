@@ -1,0 +1,37 @@
+[Unit]
+Description=QuantPilot isolated ChatGPT Codex bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=quantpilot-ai
+Group=quantpilot
+WorkingDirectory=/var/lib/quantpilot-ai/empty
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/quantpilot/current/.venv/bin/python -m quantpilot.codex_broker
+Restart=on-failure
+RestartSec=10
+UMask=0077
+RuntimeDirectory=quantpilot-ai
+RuntimeDirectoryMode=0750
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/quantpilot-ai /run/quantpilot-ai
+InaccessiblePaths=/var/lib/quantpilot -/etc/quantpilot
+CapabilityBoundingSet=
+LockPersonality=true
+LimitNOFILE=2048
+MemoryMax=768M
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

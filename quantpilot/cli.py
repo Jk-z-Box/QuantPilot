@@ -67,12 +67,12 @@ def cloudflare_rule(domain: str, port: int):
         "action_parameters": {"origin": {"port": port}}}
 
 
-def service(action):
+def service(action, unit="quantpilot"):
     if action not in ("start", "stop", "restart", "status", "logs"):
         raise ValueError("Unknown service action")
     if not shutil.which("systemctl"):
         raise ValueError("Service management requires Linux with systemd; use qp serve locally")
-    command = ["journalctl", "-u", "quantpilot", "-n", "100", "--no-pager"] if action == "logs" else ["systemctl", action, "quantpilot"]
+    command = ["journalctl", "-u", unit, "-n", "100", "--no-pager"] if action == "logs" else ["systemctl", action, unit]
     return subprocess.run(command, check=False).returncode  # noqa: S603
 
 
@@ -97,7 +97,7 @@ def main(argv=None):
     init.add_argument("--tls-cert")
     init.add_argument("--tls-key")
     init.add_argument("--demo", action="store_true")
-    for name in ("serve", "status", "start", "stop", "restart", "logs", "password", "doctor", "menu"):
+    for name in ("serve", "status", "start", "stop", "restart", "logs", "password", "doctor", "menu", "ai-status", "ai-restart", "ai-logs"):
         sub.add_parser(name)
     kill = sub.add_parser("kill")
     kill.add_argument("state", choices=["on", "off"])
@@ -128,6 +128,8 @@ def main(argv=None):
             return 0
         if args.command in (None, "menu"):
             return menu()
+        if args.command in ("ai-status", "ai-restart", "ai-logs"):
+            return service(args.command.removeprefix("ai-"), "quantpilot-ai")
         if args.command in ("start", "stop", "restart", "logs"):
             return service(args.command)
         settings = load_settings()

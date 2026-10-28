@@ -77,7 +77,7 @@ class ExchangeBroker:
                 "timeout_no_duplicate",
             )
             ready = (
-                cert["version"] == "0.3.0"
+                cert["version"] == "0.4.0"
                 and cert["exchange"] == account["exchange"]
                 and cert["credential_fingerprint"] == fingerprint
                 and all(cert["checks"].get(k) is True for k in required)
