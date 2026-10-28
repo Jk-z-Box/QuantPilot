@@ -64,6 +64,8 @@ python3 -m venv "$RELEASE_DIR/.venv"
 "$RELEASE_DIR/.venv/bin/python" -m pip install --require-hashes -r "$RELEASE_DIR/requirements.lock"
 "$RELEASE_DIR/.venv/bin/python" -m pip install --no-deps --no-build-isolation "$RELEASE_DIR"
 bash "$RELEASE_DIR/scripts/install-codex.sh"
+# Verify production RPC fields against the exact pinned binary, without user auth.
+runuser -u quantpilot-ai -- "$RELEASE_DIR/.venv/bin/python" "$RELEASE_DIR/scripts/check-codex-protocol.py"
 # Validate configuration before replacing a running release.
 if ((UPGRADE)); then
   QP_CONFIG="$DATA_DIR/config.json" "$ROOT_DIR/current/.venv/bin/qp" backup

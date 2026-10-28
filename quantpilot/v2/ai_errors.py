@@ -3,6 +3,14 @@
 from __future__ import annotations
 
 MESSAGES = {
+    "codex_sandbox": (
+        "服务器 AI 沙箱未就绪",
+        "隔离运行组件缺失或启动失败。请更新服务器组件并检查 quantpilot-ai 服务；不会降低隔离权限继续调用。",
+    ),
+    "codex_protocol": (
+        "服务器 AI 协议不兼容",
+        "服务器提交了当前 Codex 版本不支持的请求配置。请更新 QuantPilot；重新登录或更换密钥不能解决此问题。",
+    ),
     "codex_unavailable": (
         "服务器 AI 服务未就绪",
         "请检查 quantpilot-ai 服务状态，或重试连接。不会改用 API Key。",

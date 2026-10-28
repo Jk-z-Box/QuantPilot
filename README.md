@@ -1,4 +1,4 @@
-# QuantPilot 0.4.0
+# QuantPilot 0.4.1
 
 中文多账户永续合约研究与模拟交易工作台。先观察市场、查看评分依据，再用独立模拟资金验证。默认不发送真实订单。
 
@@ -131,3 +131,8 @@ bash scripts/check.sh
 在「数据与 AI」选择 **Continue with ChatGPT · 服务器登录**，生成设备码后在 OpenAI 官方页面确认，返回选择模型即可。服务器使用独立用户运行固定版本官方 Codex，负责凭据保存、续期和调用；无需 Mac 终端、登录助手或手动上传凭据。API Key 和旧版官方授权继续独立保留。登录/切换会暂停自动交易，真实交易默认锁定。
 
 安装升级会配置 `quantpilot-ai` 服务及只在本机可用的 Unix socket，不增加公网端口。支持 Linux x86_64/aarch64；需允许访问 OpenAI 官方登录和 Codex 服务。使用 `sudo qp ai-status` / `ai-restart` / `ai-logs` 管理。[操作、隔离与备份说明](docs/CHATGPT_LOGIN.md)。
+
+
+## 0.4.1 调用兼容性修复
+
+修复固定 Codex 0.165.0 已移除的 `readOnly.access` 请求字段，改用显式 `quantpilot` 权限配置并验证服务返回的配置标识。配置只允许读取空工作目录，命令网络关闭；AI 用户与交易密钥的系统级隔离不变。安装器同时校验并安装官方配套 bubblewrap，在替换运行版本之前，用无登录凭据的临时目录执行真实 `thread/start` / `turn/start` 协议验收。协议错误和沙箱组件缺失分别提示，避免误导用户反复重新登录。

@@ -101,3 +101,10 @@ OAuth 使用 PKCE S256、随机 state/nonce、RS256/JWKS 校验签名、issuer/a
 - [账号、续期与撤销](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions)
 - [模型与推理协议](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
 - [错误与恢复](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery)
+
+
+## 0.4.1 兼容性验收
+
+固定 Codex 0.165.0 已不接受旧的 `readOnly.access`。服务使用命名的 `quantpilot` 权限配置；启动和每次复核均明确选用该配置，并检查返回的 `activePermissionProfile`。只开放空工作目录的读取权限，命令网络关闭。为使用此官方协议字段，连接声明 `experimentalApi`，并不因此授予任何工具执行权限。
+
+安装器提供同版本、经 SHA-256 验证的 `codex-resources/bwrap`，并在切换发布目录前运行 `scripts/check-codex-protocol.py`。验收使用全新的临时 CODEX_HOME，不加载用户登录，实际启动线程、提交相同结构的回合并立即中断。用户的官方登录会保留，不需要因升级重新授权。

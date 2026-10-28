@@ -39,7 +39,10 @@ class RPC:
                 "nextCursor": None,
             }
         if method == "thread/start":
-            return {"thread": {"id": "thread-1"}}
+            return {
+                "thread": {"id": "thread-1"},
+                "activePermissionProfile": {"id": "quantpilot", "extends": None},
+            }
         if method == "turn/start":
             # Notifications arriving before the response must be buffered.
             for item in self.items:
@@ -169,11 +172,8 @@ def test_model_catalog_and_sandbox(broker):
     turn = next(p for m, p in broker.rpc.calls if m == "turn/start")
     assert start["ephemeral"] is True and start["approvalPolicy"] == "never"
     assert start["config"]["web_search"] == "disabled"
-    assert turn["sandboxPolicy"]["access"] == {
-        "type": "restricted",
-        "includePlatformDefaults": False,
-        "readableRoots": [broker.cwd],
-    }
+    assert start["permissions"] == turn["permissions"] == "quantpilot"
+    assert "sandbox" not in start and "sandboxPolicy" not in turn
     assert broker.thread_id is None
 
 
@@ -360,5 +360,44 @@ for line in sys.stdin:
         assert captured["stderr"] == subprocess.DEVNULL
         assert "features.shell_tool=false" in captured["args"]
         assert 'forced_login_method="chatgpt"' in captured["args"]
+        assert 'default_permissions="quantpilot"' in captured["args"]
+        assert "permissions.quantpilot.network.enabled=false" in captured["args"]
+        fs_argument = next(a for a in captured["args"] if a.startswith("permissions.quantpilot.filesystem="))
+        import tomllib
+
+        assert tomllib.loads(fs_argument)["permissions"]["quantpilot"]["filesystem"] == {
+            str(tmp_path): "read"
+        }
+        assert not any("sandbox_mode=" in a for a in captured["args"])
     finally:
         rpc.close()
+
+
+@pytest.mark.parametrize("code", [-32600, -32601, -32602])
+def test_protocol_errors_are_actionable_without_sensitive_details(code):
+    error = classify({"code": code, "message": "readOnly.access is no longer supported SECRET"})
+    assert error.kind == "codex_protocol"
+    assert "SECRET" not in json.dumps(error.public())
+
+
+def test_unexpected_active_permission_profile_never_starts_inference(broker, monkeypatch):
+    connect(broker)
+    original = broker.rpc.call
+
+    def call(method, params, timeout=20):
+        if method == "thread/start":
+            return {"thread": {"id": "thread-1"}, "activePermissionProfile": {"id": ":read-only"}}
+        return original(method, params, timeout)
+
+    monkeypatch.setattr(broker.rpc, "call", call)
+    with pytest.raises(AIError) as error:
+        broker.dispatch("response", payload())
+    assert error.value.kind == "codex_protocol"
+    assert not any(method == "turn/start" for method, _ in broker.rpc.calls)
+
+
+@pytest.mark.parametrize("message", ["bubblewrap is unavailable SECRET", "fs sandbox helper failed SECRET"])
+def test_sandbox_failures_are_actionable_and_redacted(message):
+    error = classify({"code": -32603, "message": message})
+    assert error.kind == "codex_sandbox"
+    assert "SECRET" not in json.dumps(error.public())
