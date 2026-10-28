@@ -1,0 +1,13 @@
+[Unit]
+Description=QuantPilot bounded update worker
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+WorkingDirectory=/var/lib/quantpilot-maintenance
+ExecStart=/opt/quantpilot/current/.venv/bin/python /opt/quantpilot/current/scripts/web-update.py
+TimeoutStartSec=2100
+StandardOutput=null
+StandardError=journal

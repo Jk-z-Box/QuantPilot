@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from .admin_api import install as install_admin
 from .advisor import advise
 from .config import EXCHANGES, Settings, config_path, load_settings, update_settings, verify_password
 from .engine import Engine, OrderRequest
@@ -108,6 +109,8 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
             except ValueError:
                 length = -1
             max_body = 131072 if request.url.path == "/api/v2/chatgpt/pair/complete" else 16384
+            if request.url.path == "/api/v2/logic/import":
+                max_body = 1048576
             if not 0 <= length <= max_body or request.headers.get("transfer-encoding"):
                 return JSONResponse({"detail": "invalid_body_size"}, status_code=413)
             if request.headers.get("content-type", "").split(";")[0] != "application/json":
@@ -149,7 +152,7 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
 
     @app.get("/healthz")
     def health():
-        return {"status": "ok", "version": "0.4.1", "mode": "paper-first"}
+        return {"status": "ok", "version": "0.5.0", "mode": "paper-first"}
 
     @app.post("/api/login")
     def login(body: Login, request: Request, response: Response):
@@ -293,6 +296,7 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
         return {"enabled": body.enabled, "model": body.model}
 
     install_v2(app, workspace, session, mutation)
+    install_admin(app, store, settings, auth_settings, session, mutation)
 
     static = Path(__file__).parent / "static"
     app.mount("/static", StaticFiles(directory=static), name="static")

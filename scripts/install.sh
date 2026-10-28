@@ -99,6 +99,9 @@ exec /opt/quantpilot/current/.venv/bin/qp "$@"
 WRAPPER
 chmod 755 /usr/local/bin/qp
 ln -sfn /usr/local/bin/qp /usr/local/bin/quantpilot
+install -d -m 755 -o root -g root /var/lib/quantpilot-maintenance
+install -m 644 "$SOURCE_DIR/scripts/quantpilot-update.service" /etc/systemd/system/quantpilot-update.service
+install -m 644 "$SOURCE_DIR/scripts/quantpilot-update.timer" /etc/systemd/system/quantpilot-update.timer
 systemctl daemon-reload
 systemctl enable quantpilot quantpilot-ai
 systemctl restart quantpilot-ai || true
@@ -130,5 +133,6 @@ if (( ! READY )); then
   fi
   exit 1
 fi
+systemctl enable --now quantpilot-update.timer
 echo "QuantPilot installed. Use: sudo qp | sudo qp status | sudo qp logs"
 echo "真实交易已锁定。使用设置的 HTTPS 域名，或 SSH 端口转发访问本机端口。"

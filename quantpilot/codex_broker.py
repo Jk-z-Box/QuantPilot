@@ -109,7 +109,7 @@ class Protocol:
             self.call(
                 "initialize",
                 {
-                    "clientInfo": {"name": "quantpilot", "title": "QuantPilot", "version": "0.4.1"},
+                    "clientInfo": {"name": "quantpilot", "title": "QuantPilot", "version": "0.5.0"},
                     "capabilities": {"experimentalApi": True},
                 },
                 15,
@@ -316,6 +316,7 @@ class Broker:
         fmt = payload.get("text", {}).get("format", {})
         if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,100}", model) or fmt.get("name") not in (
             "opportunity_review",
+            "strategy_review",
             "public_observations",
         ):
             raise AIError("parameters")

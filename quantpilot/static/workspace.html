@@ -7,6 +7,7 @@
     <title>QuantPilot · 市场与交易工作台</title>
     <link rel="stylesheet" href="/static/workspace.css" />
     <script src="/static/workspace.js" defer></script>
+    <script src="/static/management.js" defer></script>
   </head>
   <body>
     <section id="login" class="login-wrap">
@@ -62,8 +63,10 @@
           ><button class="nav" data-page="history">
             <span>≡</span>交易记录</button
           ><button class="nav" data-page="settings">
-            <span>⚙</span>数据与 AI
+            <span>✧</span>数据与 AI
           </button>
+          <button class="nav" data-page="logic"><span>◇</span>量化逻辑</button>
+          <button class="nav" data-page="admin"><span>⚙</span>设置</button>
         </nav>
         <div class="sidebar-bottom">
           <div class="guide">
@@ -73,7 +76,7 @@
           </div>
           <a href="/legacy" class="legacy">旧版模拟账本 ↗</a
           ><button id="logout" class="text-button">退出登录</button
-          ><small>QUANTPILOT 0.4</small>
+          ><small>QUANTPILOT 0.5</small>
         </div>
       </aside>
       <div class="main">
@@ -768,6 +771,325 @@
               </details>
             </article>
           </section>
+          <section data-panel="logic" hidden class="management-page">
+            <div class="logic-hero card">
+              <div>
+                <p class="eyebrow">STRATEGY STUDIO</p>
+                <h2>让每一次调整，都有据可查。</h2>
+                <p class="muted">
+                  查看规则、编辑参数、复盘结果。修改前自动存档，随时恢复。
+                </p>
+              </div>
+              <div class="version-chip">
+                <small>当前版本</small><strong id="logicVersion">载入中</strong
+                ><span id="logicCreated" class="small muted"></span>
+              </div>
+            </div>
+            <div id="logicStatus" class="notice-box" role="status">
+              正在读取策略状态…
+            </div>
+            <div class="logic-metrics" id="logicMetrics"></div>
+            <div class="management-grid">
+              <article class="card management-card">
+                <div class="card-heading">
+                  <div>
+                    <p class="eyebrow">01 / RULES</p>
+                    <h2>当前量化逻辑</h2>
+                  </div>
+                  <span class="badge">实际运行参数</span>
+                </div>
+                <details class="logic-explainer" open>
+                  <summary>信号如何产生？</summary>
+                  <ol class="logic-flow">
+                    <li>
+                      <b>确认趋势</b>
+                      <p>
+                        只使用已收盘的周线、日线、4H、1H K 线，EMA 确定方向；4H
+                        与 1H 必须一致，保守模式要求四周期一致。
+                      </p>
+                    </li>
+                    <li>
+                      <b>逐项评分</b>
+                      <p>
+                        趋势 24、EMA/RSI/MACD 动量 18、成交量 12、波动率
+                        6、资金费率 6、合约 OI 4、期权 8、ETF 6、清算
+                        8、宏观新闻 8，总分
+                        100。缺失数据不得分，也不会重新折算成满分。
+                      </p>
+                    </li>
+                    <li>
+                      <b>生成交易计划</b>
+                      <p>
+                        止损距离 = ATR × 止损倍数，至少为价格的
+                        0.3%；两档止盈按风险距离计算。预估手续费与滑点计入收益风险比。MACD
+                        固定 12/26/9，ATR 固定 14。
+                      </p>
+                    </li>
+                    <li>
+                      <b>通过独立风控</b>
+                      <p>
+                        达到市场页的有效分数后，仍须通过成交量、时效、事件风险、价差、资金、杠杆、强平距离与账户授权检查。AI
+                        无法关闭这些检查。
+                      </p>
+                    </li>
+                  </ol>
+                </details>
+                <form id="logicForm" class="management-form">
+                  <div class="form-grid" id="logicFields"></div>
+                  <label
+                    >修改说明<input
+                      name="note"
+                      maxlength="1000"
+                      placeholder="例如：提高成交量确认要求"
+                  /></label>
+                  <p class="fine">
+                    保存后重新评估信号；已有仓位保留保护，不使用新版本继续加仓。存档保留旧版本评分及截至修改时的已实现净盈亏。
+                  </p>
+                  <div class="form-actions">
+                    <button class="primary">保存并建立新版本</button
+                    ><button type="button" class="secondary" id="logicDiscard">
+                      放弃未保存修改
+                    </button>
+                  </div>
+                </form>
+              </article>
+              <article class="card management-card">
+                <div class="card-heading">
+                  <div>
+                    <p class="eyebrow">02 / REVIEW</p>
+                    <h2>AI 定期复盘</h2>
+                  </div>
+                  <button class="secondary" id="reviewLogic">立即复盘</button>
+                </div>
+                <p class="muted">
+                  使用“数据与
+                  AI”中保存的连接和模型。合格时保留逻辑并继续复盘；后续低于合格线时，恢复评估自动优化方案。
+                </p>
+                <form id="logicReviewForm" class="management-form">
+                  <label class="check-line"
+                    ><input type="checkbox" name="enabled" />启用定期复盘</label
+                  >
+                  <label class="check-line"
+                    ><input
+                      type="checkbox"
+                      name="auto_optimize"
+                    />低于合格线时允许自动优化</label
+                  >
+                  <div class="form-grid">
+                    <label
+                      >逻辑合格分数 / 100<input
+                        type="number"
+                        name="passing_score"
+                        min="1"
+                        max="100"
+                        step="1"
+                        required
+                      /><small
+                        >用于策略复盘，与市场页的开仓有效分数独立。</small
+                      ></label
+                    >
+                    <label
+                      >复盘间隔 / 小时<input
+                        type="number"
+                        name="interval_hours"
+                        min="1"
+                        max="168"
+                        step="1"
+                        required
+                    /></label>
+                    <label
+                      >最少完整交易数<input
+                        type="number"
+                        name="minimum_trades"
+                        min="20"
+                        max="1000"
+                        step="1"
+                        required
+                      /><small
+                        >至少 20 笔；不足时不评分、不自动优化。</small
+                      ></label
+                    >
+                    <label
+                      >统计窗口 / 天<input
+                        type="number"
+                        name="lookback_days"
+                        min="7"
+                        max="365"
+                        step="1"
+                        required
+                    /></label>
+                  </div>
+                  <p class="fine">
+                    每个参数单次最多改变 20%，两次自动优化至少间隔 24
+                    小时。交易所账户正在自动交易或有受管仓位时不自动改策略。这里只发送参数、匿名交易结果和汇总，不发送密钥。
+                  </p>
+                  <button class="primary">保存复盘设置</button>
+                </form>
+                <div class="notice-box">
+                  <b>统计口径</b>
+                  <p class="small">
+                    仅统计本机当前版本、当前风险偏好与有效分数下，使用真实行情的模拟完整交易。分批平仓合并为一笔；净盈亏包含开平仓手续费、滑点与模拟资金费。演示数据、未平仓、重置掉的仓位、无法归属的旧交易和未核对的交易所盈亏不参与评分。
+                  </p>
+                  <p class="small">
+                    盈利因子 = 总盈利 ÷ 总亏损；盈亏比 = 平均盈利 ÷
+                    平均亏损。没有亏损样本时显示“—”，不会记作无限盈利。
+                  </p>
+                </div>
+              </article>
+            </div>
+            <article class="card management-card">
+              <div class="card-heading">
+                <div>
+                  <p class="eyebrow">03 / JOURNAL</p>
+                  <h2>复盘与优化记录</h2>
+                </div>
+                <span class="small muted">保留最近 500 次复盘</span>
+              </div>
+              <div id="logicReviews" class="table-wrap"></div>
+            </article>
+            <article class="card management-card">
+              <div class="card-heading">
+                <div>
+                  <p class="eyebrow">04 / ARCHIVES</p>
+                  <h2>版本存档</h2>
+                </div>
+                <div class="form-actions">
+                  <button id="exportLogic" class="secondary">
+                    导出策略与存档</button
+                  ><button id="importLogic" class="secondary">导入文件</button
+                  ><input
+                    id="logicFile"
+                    type="file"
+                    accept="application/json,.json"
+                    hidden
+                  />
+                </div>
+              </div>
+              <form id="archiveForm" class="archive-controls">
+                <label
+                  >最多保留存档数<input
+                    type="number"
+                    name="max_backups"
+                    min="1"
+                    max="100"
+                    step="1"
+                    required /></label
+                ><button class="secondary">应用数量</button>
+                <p class="fine">
+                  1–100
+                  份，超出时删除最旧存档。当前版本不占名额；导出不包含账号密码、API
+                  密钥或交易凭证。
+                </p>
+              </form>
+              <div id="logicArchives" class="table-wrap"></div>
+            </article>
+          </section>
+          <section data-panel="admin" hidden class="management-page">
+            <div class="management-grid">
+              <article class="card management-card">
+                <div class="card-heading">
+                  <div>
+                    <p class="eyebrow">ACCOUNT</p>
+                    <h2>登录账号</h2>
+                  </div>
+                </div>
+                <p class="muted">修改成功后，所有已登录设备需要重新登录。</p>
+                <form id="identityForm" class="management-form">
+                  <label
+                    >用户名<input
+                      name="username"
+                      minlength="3"
+                      maxlength="64"
+                      pattern="[a-zA-Z0-9_.-]+"
+                      autocomplete="username"
+                      required
+                    /><small
+                      >3–64 位，支持英文字母、数字、下划线、点和短横线。</small
+                    ></label
+                  >
+                  <label
+                    >当前密码<input
+                      name="current_password"
+                      type="password"
+                      autocomplete="current-password"
+                      maxlength="256"
+                      required
+                  /></label>
+                  <label
+                    >新密码<input
+                      name="new_password"
+                      type="password"
+                      autocomplete="new-password"
+                      minlength="12"
+                      maxlength="256"
+                    /><small>12–256 个字符；留空则仅修改用户名。</small></label
+                  >
+                  <label
+                    >确认新密码<input
+                      name="confirm_password"
+                      type="password"
+                      autocomplete="new-password"
+                      maxlength="256"
+                  /></label>
+                  <button class="primary">保存账号并重新登录</button>
+                </form>
+              </article>
+              <article class="card management-card">
+                <div class="card-heading">
+                  <div>
+                    <p class="eyebrow">SYSTEM</p>
+                    <h2>版本与更新</h2>
+                  </div>
+                  <span id="systemVersion" class="badge">—</span>
+                </div>
+                <div id="systemInfo" class="system-info"></div>
+                <p class="fine">
+                  更新来源固定为你自己的 QuantPilot
+                  仓库开发分支。安装前自动备份，启动检查失败时回退程序版本；更新后自动交易保持暂停。
+                </p>
+                <div class="form-actions">
+                  <button class="secondary" id="checkUpdate">检查更新</button
+                  ><button class="primary" id="applyUpdate" disabled>
+                    安装更新
+                  </button>
+                </div>
+                <p id="latestUpdate" class="small muted" role="status"></p>
+                <div id="updateStatus" class="notice-box" role="status"></div>
+              </article>
+              <article class="card management-card">
+                <div class="card-heading">
+                  <div>
+                    <p class="eyebrow">PREFERENCES</p>
+                    <h2>界面与常用配置</h2>
+                  </div>
+                </div>
+                <form id="displayForm" class="management-form">
+                  <label
+                    >网页刷新间隔 / 秒<input
+                      name="refresh_seconds"
+                      type="number"
+                      min="3"
+                      max="60"
+                      step="1"
+                      required
+                    /><small
+                      >只影响页面刷新，后台行情监测与仓位保护频率不变。</small
+                    ></label
+                  ><button class="primary">保存界面设置</button>
+                </form>
+                <div class="settings-links">
+                  <button class="text-button" data-go="logic">
+                    量化参数、复盘与备份设置 ↗</button
+                  ><button class="text-button" data-go="settings">
+                    AI 连接和数据来源 ↗</button
+                  ><button class="text-button" data-go="accounts">
+                    账户、币数量与杠杆设置 ↗
+                  </button>
+                </div>
+              </article>
+            </div>
+          </section>
+
           <footer>
             <span>数据与机会持续刷新 · 失效信号不执行</span
             ><span>QUANTPILOT / MISSION CONTROL</span>

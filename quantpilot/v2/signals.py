@@ -5,14 +5,16 @@ import math
 import statistics
 
 from ..strategy import ema, rsi
+from .logic import Parameters
 from .models import PROFILES
 
 
-def indicators(rows):
+def indicators(rows, parameters=None):
+    parameters = parameters or Parameters().model_dump()
     if len(rows) < 60:
         raise ValueError("至少需要 60 根已完成 K 线")
     close = [float(r[4]) for r in rows]
-    fast, slow = ema(close, 20), ema(close, 50)
+    fast, slow = ema(close, parameters["ema_fast"]), ema(close, parameters["ema_slow"])
     series = [ema(close[:i], 12) - ema(close[:i], 26) for i in range(35, len(close) + 1)]
     macd = series[-1]
     signal = ema(series, 9)
@@ -25,7 +27,9 @@ def indicators(rows):
     return {
         "ema20": fast,
         "ema50": slow,
-        "rsi": rsi(close),
+        "rsi": rsi(close, parameters["rsi_period"]),
+        "ema_fast_period": parameters["ema_fast"],
+        "ema_slow_period": parameters["ema_slow"],
         "macd": macd,
         "macd_signal": signal,
         "macd_hist": macd - signal,
@@ -38,12 +42,13 @@ def indicators(rows):
     }
 
 
-def evaluate(item, frames, quote, evidence, profile, now, min_score=80):
+def evaluate(item, frames, quote, evidence, profile, now, min_score=80, parameters=None):
+    parameters = Parameters.model_validate(parameters or {}).model_dump()
     rule = PROFILES[profile]
     stats, blockers, reasons = {}, [], []
     for frame in ("1w", "1d", "4h", "1h"):
         try:
-            stats[frame] = indicators(frames[frame])
+            stats[frame] = indicators(frames[frame], parameters)
         except (KeyError, ValueError, TypeError):
             blockers.append(frame + " 趋势数据不足")
     base = {
@@ -91,7 +96,7 @@ def evaluate(item, frames, quote, evidence, profile, now, min_score=80):
         blockers.append("保守模式要求四个周期方向一致")
     momentum = 43 <= hour["rsi"] <= 70 if sign == 1 else 30 <= hour["rsi"] <= 57
     points("动量 EMA / RSI / MACD", (9 if momentum else 0) + (9 if hour["macd_hist"] * sign > 0 else 0), 18)
-    volume_ok = hour["volume_ratio"] >= rule["volume"]
+    volume_ok = hour["volume_ratio"] >= rule["volume"] * parameters["volume_multiplier"]
     points("成交量确认", 12 if volume_ok else 0, 12)
     if not volume_ok:
         blockers.append("成交量不支持当前方向")
@@ -133,17 +138,23 @@ def evaluate(item, frames, quote, evidence, profile, now, min_score=80):
         points(name, 0 if risk or adverse else weight if favorable else weight / 2, weight)
     score = round(sum(b["points"] for b in breakdown))
     entry = float(quote["ask"] if sign == 1 else quote["bid"])
-    distance = max(hour["atr"] * 2, entry * 0.003)
+    distance = max(hour["atr"] * parameters["atr_stop"], entry * 0.003)
     stop = entry - sign * distance
     if stop <= 0:
         blockers.append("止损价格无效")
     targets = [
-        {"price": entry + sign * distance * 1.5, "ratio": 0.5},
-        {"price": entry + sign * distance * 3, "ratio": 0.5},
+        {"price": entry + sign * distance * parameters["target_1"], "ratio": parameters["target_1_ratio"]},
+        {
+            "price": entry + sign * distance * parameters["target_2"],
+            "ratio": 1 - parameters["target_1_ratio"],
+        },
     ]
     # Account for estimated round trip fees and slippage in the displayed R/R.
     costs = entry * 0.0014
-    rr = (distance * 2.25 - costs) / (distance + costs)
+    reward_multiple = parameters["target_1"] * parameters["target_1_ratio"] + parameters["target_2"] * (
+        1 - parameters["target_1_ratio"]
+    )
+    rr = (distance * reward_multiple - costs) / (distance + costs)
     if rr < rule["min_rr"]:
         blockers.append("扣除预估费用后的收益风险比不足")
     if score < min_score:

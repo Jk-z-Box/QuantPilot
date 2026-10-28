@@ -185,7 +185,7 @@ def test_signal_no_missing_data_rescaling(monkeypatch, quote):
     monkeypatch.setattr(
         signals,
         "indicators",
-        lambda rows: {
+        lambda rows, parameters=None: {
             "trend": "long",
             "rsi": 55,
             "macd_hist": 1,
@@ -873,7 +873,7 @@ def test_live_receipt_is_bound_expiring_private_and_blockable(workspace, monkeyp
     workspace.vault.put("v2:account:" + a["id"], secret)
     monkeypatch.setenv("QP_LIVE_EXECUTION", "1")
     cert = {
-        "version": "0.4.1",
+        "version": "0.5.0",
         "exchange": "binance",
         "credential_fingerprint": hashlib.sha256(json.dumps(secret, sort_keys=True).encode()).hexdigest(),
         "verified_at": time.time(),

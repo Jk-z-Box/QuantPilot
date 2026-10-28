@@ -16,6 +16,7 @@ from .codex_client import CodexConnection
 from .execution import ExchangeBroker
 from .feeds import Feeds
 from .limits import contract_limits
+from .logic import LogicEngine
 from .market import FuturesMarket
 from .models import Account, Preferences, defaults, policy_matches, signal_policy
 from .research import ResearchEngine
@@ -74,6 +75,7 @@ class Workspace:
         self.chatgpt = ChatGPTConnection(vault)
         self.codex = CodexConnection()
         self.research = ResearchEngine(self)
+        self.logic = LogicEngine(self)
 
     def codex_action(self, action):
         if action == "activate":
@@ -101,6 +103,8 @@ class Workspace:
         return result
 
     def auth_changed(self):
+        if hasattr(self, "logic"):
+            self.logic.settings({**self.store.get("v2_logic")["settings"], "enabled": False, "auto_optimize": False})
         with self.lock:
             self.ai_cache.clear()
             self.ai_error = None
@@ -364,6 +368,7 @@ class Workspace:
 
     def scan(self, item, analyze, prefs):
         key = item["id"]
+        logic = self.logic.current()
         try:
             quote = self.market.quote(item)
         except Exception:
@@ -404,7 +409,11 @@ class Workspace:
                 quote = self.market.quote(item)
             except Exception:
                 quote = {**quote, "timestamp": 0}
-            op = evaluate(item, frames, quote, evidence, prefs["profile"], time.time(), prefs["min_score"])
+            op = evaluate(item, frames, quote, evidence, prefs["profile"], time.time(), prefs["min_score"], logic["parameters"])
+            op["logic_version"] = logic["id"]
+            op["demo"] = self.market.demo
+            if op.get("id"):
+                op["id"] += ":" + logic["id"]
             op["policy"] = signal_policy(prefs)
         with self.lock:
             current_item = next((i for i in self.store.get("v2_watchlist") if i["id"] == key), None)
@@ -417,6 +426,8 @@ class Workspace:
             if frames is not None:
                 self.frames[key] = frames
             if op:
+                if self.logic.current()["id"] != logic["id"]:
+                    return
                 current_prefs = self.store.get("v2_preferences")
                 if any(
                     current_prefs[k] != prefs[k]
@@ -636,7 +647,7 @@ class Workspace:
                 for r in db.execute("SELECT * FROM v2_orders ORDER BY created DESC LIMIT 100")
             ]
         return {
-            "version": "0.4.1",
+            "version": "0.5.0",
             "now": now,
             "demo": self.market.demo,
             "watchlist": self.store.get("v2_watchlist"),
@@ -688,6 +699,15 @@ class Workspace:
         self.thread = threading.Thread(target=loop, name="mission-control", daemon=True)
         self.thread.start()
         self.research.start()
+
+        def logic_loop():
+            while not self.stop_event.wait(15):
+                try:
+                    self.logic.scheduled()
+                except Exception:
+                    self.store.record("logic_scheduler_failed", {})
+
+        threading.Thread(target=logic_loop, name="logic-scheduler", daemon=True).start()
 
     def stop(self):
         self.stop_event.set()

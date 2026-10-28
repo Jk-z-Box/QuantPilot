@@ -1721,3 +1721,306 @@ dialog[open] {
     font-size: 1.1rem;
   }
 }
+
+/* Strategy studio and workspace administration */
+.management-page {
+  display: grid;
+  gap: 22px;
+  min-width: 0;
+}
+.management-page[hidden],
+.heading-actions[hidden] {
+  display: none;
+}
+.management-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 22px;
+  align-items: start;
+}
+.management-card {
+  padding: 26px;
+  min-width: 0;
+}
+.logic-hero {
+  padding: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  background: linear-gradient(110deg, #edf7f1, #fff);
+}
+.logic-hero h2 {
+  font-size: 24px;
+  margin: 10px 0;
+}
+.version-chip {
+  min-width: 180px;
+  display: grid;
+  gap: 8px;
+  border-left: 1px solid #d3e3da;
+  padding-left: 25px;
+}
+.version-chip strong {
+  font:
+    26px ui-monospace,
+    monospace;
+  color: #215f4f;
+}
+.version-chip small,
+.logic-metrics span {
+  color: #687e75;
+  font-size: 12px;
+}
+.logic-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+.logic-metrics > div {
+  border: 1px solid #dce7e0;
+  border-radius: 12px;
+  background: #fff;
+  padding: 20px;
+  display: grid;
+  gap: 12px;
+}
+.logic-metrics strong {
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+  color: #245e4c;
+}
+.management-form {
+  display: grid;
+  gap: 20px;
+  margin-top: 22px;
+}
+.management-form > button {
+  justify-self: start;
+}
+.management-form .form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px 16px;
+}
+.management-form label {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  align-content: start;
+}
+.management-form label small {
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.65;
+  color: #72837c;
+}
+.management-form .check-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  line-height: 1.6;
+}
+.management-form .check-line input {
+  flex: 0 0 17px;
+  width: 17px;
+  height: 17px;
+  margin: 0;
+}
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.logic-explainer {
+  margin: 20px 0;
+  border-bottom: 1px solid #e6ece8;
+  padding-bottom: 20px;
+}
+.logic-explainer summary {
+  font-weight: 600;
+  color: #286853;
+  cursor: pointer;
+}
+.logic-flow {
+  padding-left: 22px;
+  margin: 20px 0 0;
+}
+.logic-flow li {
+  padding-left: 5px;
+  margin-bottom: 16px;
+}
+.logic-flow p {
+  color: #70827a;
+  line-height: 1.8;
+  font-size: 13px;
+  margin: 6px 0 0;
+}
+.management-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.management-table th,
+.management-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 15px 12px;
+  border-bottom: 1px solid #e8eeea;
+  white-space: nowrap;
+}
+.management-table th {
+  color: #718379;
+  font-size: 12px;
+  font-weight: 500;
+}
+.management-table td.number {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.management-table td small {
+  display: block;
+  color: #819087;
+  font-size: 11px;
+  margin-top: 6px;
+}
+.management-table .review-summary {
+  white-space: normal;
+  min-width: 240px;
+  max-width: 450px;
+  line-height: 1.75;
+}
+.management-table .review-summary ul {
+  padding-left: 18px;
+}
+.management-empty {
+  padding: 36px 20px;
+  text-align: center;
+  color: #7b8b82;
+  background: #f7faf8;
+  border-radius: 10px;
+  font-size: 13px;
+}
+.archive-controls {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin: 20px 0;
+}
+.archive-controls label {
+  margin: 0;
+  width: 150px;
+  flex-shrink: 0;
+}
+.archive-controls .fine {
+  flex: 1 1 240px;
+  margin: 0;
+}
+.archive-details,
+.system-info dl {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 15px;
+  font-size: 13px;
+}
+.system-info dl {
+  margin: 25px 0;
+}
+.system-info dt,
+.archive-details dt {
+  color: #75867d;
+}
+.system-info dd,
+.archive-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.settings-links {
+  display: grid;
+  justify-items: start;
+  gap: 14px;
+  margin-top: 28px;
+  border-top: 1px solid #e7ede9;
+  padding-top: 24px;
+}
+.management-card .card-heading {
+  flex-wrap: wrap;
+  gap: 15px;
+  align-items: center;
+}
+.management-card .notice-box {
+  margin-top: 25px;
+}
+@media (max-width: 1200px) {
+  .management-grid {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 640px) {
+  .sidebar {
+    height: 66px;
+    padding: 5px 3px;
+  }
+  .sidebar nav {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 0;
+  }
+  .sidebar .nav {
+    width: 100%;
+    padding: 5px 1px;
+    font-size: 9px;
+    white-space: nowrap;
+  }
+  .management-page {
+    gap: 16px;
+  }
+  .management-card,
+  .logic-hero {
+    padding: 20px;
+  }
+  .logic-hero {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .logic-hero h2 {
+    font-size: 21px;
+  }
+  .version-chip {
+    border: 0;
+    border-top: 1px solid #d3e3da;
+    padding: 16px 0 0;
+    width: 100%;
+  }
+  .logic-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .logic-metrics > div {
+    padding: 15px;
+  }
+  .logic-metrics strong {
+    font-size: 19px;
+  }
+  .management-form .form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.management-page > .notice-box {
+  margin: 0;
+}
+.management-card .card-heading {
+  display: flex;
+  justify-content: space-between;
+}
+.management-card .table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.management-form .check-line {
+  flex-direction: row;
+  justify-content: flex-start;
+}

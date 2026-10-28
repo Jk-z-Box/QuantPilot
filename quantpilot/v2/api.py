@@ -7,6 +7,7 @@ from fastapi import Depends, HTTPException, Request
 from pydantic import Field, SecretStr
 
 from .ai import list_models
+from .logic import Edit, Import, Restore, ReviewSettings
 from .models import Account, AccountSecrets, Evidence, Instrument, KeyInput, Model, Preferences, Reset
 
 
@@ -237,3 +238,36 @@ def install(app, workspace, session, mutation):
     @app.post("/api/v2/ai/data", dependencies=[Depends(mutation)])
     def ai_data():
         return safe(workspace.research.request_now)
+
+    @app.get("/api/v2/logic", dependencies=[Depends(session)])
+    def logic_state():
+        return workspace.logic.state()
+
+    @app.put("/api/v2/logic", dependencies=[Depends(mutation)])
+    def logic_edit(body: Edit):
+        return safe(workspace.logic.edit, body)
+
+    @app.put("/api/v2/logic/settings", dependencies=[Depends(mutation)])
+    def logic_settings(body: ReviewSettings):
+        return safe(workspace.logic.settings, body.model_dump())
+
+    @app.post("/api/v2/logic/review", dependencies=[Depends(mutation)])
+    def logic_review():
+        return safe(workspace.logic.request)
+
+    @app.get("/api/v2/logic/export", dependencies=[Depends(session)])
+    def logic_export():
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(
+            workspace.logic.export(),
+            headers={"Content-Disposition": 'attachment; filename="quantpilot-logic.json"'},
+        )
+
+    @app.post("/api/v2/logic/import", dependencies=[Depends(mutation)])
+    def logic_import(body: Import):
+        return safe(workspace.logic.import_bundle, body)
+
+    @app.post("/api/v2/logic/restore", dependencies=[Depends(mutation)])
+    def logic_restore(body: Restore):
+        return safe(workspace.logic.restore, body)

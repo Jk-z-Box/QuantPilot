@@ -11,6 +11,7 @@ import ccxt
 from ..market import decimal as D
 from .accounts import ledger, size_order
 from .limits import contract_limits
+from .logic import check_version
 from .models import policy_matches
 
 
@@ -77,7 +78,7 @@ class ExchangeBroker:
                 "timeout_no_duplicate",
             )
             ready = (
-                cert["version"] == "0.4.1"
+                cert["version"] == "0.5.0"
                 and cert["exchange"] == account["exchange"]
                 and cert["credential_fingerprint"] == fingerprint
                 and all(cert["checks"].get(k) is True for k in required)
@@ -229,6 +230,7 @@ class ExchangeBroker:
             )
             with self.store.transaction() as db:
                 current = self.store.read(db, "v2_accounts").get(aid)
+                check_version(self.store, db, opportunity, existing)
                 if (
                     current != account
                     or not current["auto"]
@@ -373,6 +375,7 @@ class ExchangeBroker:
                         else str(base_qty * D(order.get("average") or sizing["price"]))
                     )
                     positions[key] = {
+                        "logic_version": old.get("logic_version") if old else opportunity.get("logic_version"),
                         "side": opportunity["direction"],
                         "qty": str(D(position["contracts"]) * contract_size),
                         "entry": str(position["entryPrice"]),

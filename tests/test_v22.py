@@ -75,7 +75,7 @@ def test_invalid_threshold_rejected(score):
 def test_threshold_applies_to_signal_ai_and_hard_risk_blocks(monkeypatch, quote, opportunity, workspace):
     monkeypatch.setattr(
         "quantpilot.v2.signals.indicators",
-        lambda rows: {
+        lambda rows, parameters=None: {
             "trend": "long",
             "rsi": 55,
             "macd_hist": 1,

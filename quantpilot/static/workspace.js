@@ -39,6 +39,8 @@ let state = null,
   timer = null,
   chartTimer = null;
 const titles = {
+  logic: ["量化逻辑", "规则透明，修改可追溯，复盘有依据。"],
+  admin: ["设置", "管理账号、版本与工作区偏好。"],
   market: ["市场与机会", "让数据说清楚，什么时候值得行动。"],
   accounts: ["账户与仓位", "各自的资金，各自的授权，清楚的风险边界。"],
   history: ["交易记录", "追踪每次判断与执行，让结果有迹可循。"],
@@ -150,6 +152,7 @@ function accountPayload(a) {
 }
 function go(next) {
   page = next;
+  window.scrollTo({ top: 0, behavior: "instant" });
   document
     .querySelectorAll("[data-panel]")
     .forEach((x) => (x.hidden = x.dataset.panel !== page));
@@ -159,6 +162,9 @@ function go(next) {
   $("breadcrumb").textContent = titles[page][0];
   $("pageTitle").textContent = titles[page][0];
   $("pageDescription").textContent = titles[page][1];
+  document.querySelector(".heading-actions").hidden = page !== "market";
+  $("scoreHelp").hidden = page !== "market";
+  if (page === "logic" || page === "admin") action(() => loadManagement(true));
   if (page === "history") loadAudit();
   if (page === "settings") fillSettings();
 }
@@ -207,7 +213,8 @@ async function start() {
   $("app").hidden = false;
   await refresh();
   stop();
-  timer = setInterval(refresh, 5000);
+  await loadDisplayPreference();
+  timer = setInterval(refresh, window.refreshSeconds * 1000);
   chartTimer = setInterval(() => {
     if (page === "market") loadChart();
   }, 5000);
@@ -223,6 +230,7 @@ async function refresh() {
       rows = [];
     }
     render();
+    if (page === "logic" || page === "admin") await loadManagement(false);
     error("");
     $("connection").innerHTML =
       '<i class="dot"></i> 已连接 · ' +

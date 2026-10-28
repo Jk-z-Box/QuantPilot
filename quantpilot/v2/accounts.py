@@ -6,6 +6,7 @@ import json
 import time
 
 from ..market import decimal as D
+from .logic import check_version
 from .models import PROFILES, policy_matches
 
 FEE = D(".0005")
@@ -217,6 +218,7 @@ class PaperBroker:
             books = self.store.read(db, "v2_ledgers")
             book = books[aid]
             old = book["positions"].get(key)
+            check_version(self.store, db, opportunity, old)
             n = old["adds"] + 1 if adding and old else 0
             identity = hashlib.sha256(
                 f"{aid}:{book['generation']}:{opportunity['id']}:{n}".encode()
@@ -237,9 +239,18 @@ class PaperBroker:
                 old["original_qty"] = str(D(old["original_qty"]) + qty)
                 old["margin"] = str(D(old["margin"]) + qty * price / sizing["leverage"])
                 old["adds"] += 1
+                old["logic_net"] = str(D(old.get("logic_net", 0)) - fee)
                 old["liquidation"] = str(sizing["liquidation"])
             else:
                 book["positions"][key] = {
+                    "logic_version": opportunity.get("logic_version"),
+                    "logic_trade_id": identity,
+                    "logic_symbol": opportunity["symbol"],
+                    "logic_net": str(-fee),
+                    "logic_demo": opportunity.get("demo", True),
+                    "logic_policy": json.dumps(
+                        {"profile": prefs["profile"], "min_score": prefs["min_score"]}, sort_keys=True
+                    ),
                     "side": opportunity["direction"],
                     "qty": str(qty),
                     "original_qty": str(qty),
@@ -260,6 +271,7 @@ class PaperBroker:
                 }
             self.store.write(db, "v2_ledgers", books)
             detail = {
+                "logic_version": opportunity.get("logic_version"),
                 "instrument_id": key,
                 "side": opportunity["direction"],
                 "qty": str(qty),
@@ -298,11 +310,43 @@ class PaperBroker:
                 )
             if reason == "risk_reduce":
                 p["risk_reduced"] = True
+            p["logic_net"] = str(D(p.get("logic_net", 0)) + pnl - fee)
             if D(p["qty"]) <= D(".000000001"):
+                if p.get("logic_version") and p.get("logic_trade_id"):
+                    db.execute(
+                        "INSERT OR IGNORE INTO logic_trades VALUES (?,?,?,?,?,?)",
+                        (
+                            p["logic_trade_id"],
+                            p["logic_version"],
+                            time.time(),
+                            float(p["logic_net"]),
+                            int(p.get("logic_demo", True)),
+                            p.get("logic_policy", "{}"),
+                        ),
+                    )
+                if p.get("logic_version") and p.get("logic_trade_id"):
+                    detail = {
+                        "symbol": p.get("logic_symbol", key),
+                        "side": p["side"],
+                        "opened_at": p["opened_at"],
+                        "closed_at": time.time(),
+                        "average_entry": float(p["entry"]),
+                        "final_exit": float(price),
+                        "quantity": float(p["original_qty"]),
+                        "additions": p["adds"],
+                        "exit_reason": reason,
+                        "net_pnl": float(p["logic_net"]),
+                        "partial_targets": len(p["tp_done"]),
+                    }
+                    db.execute(
+                        "INSERT OR IGNORE INTO logic_trade_details VALUES (?,?)",
+                        (p["logic_trade_id"], json.dumps(detail)),
+                    )
                 del book["positions"][key]
             self.store.write(db, "v2_ledgers", books)
             identity = hashlib.sha256(f"{aid}:{key}:{time.time_ns()}".encode()).hexdigest()
             detail = {
+                "logic_version": p.get("logic_version"),
                 "instrument_id": key,
                 "qty": str(qty),
                 "price": str(price),
@@ -388,6 +432,7 @@ class PaperBroker:
                         fee = D(current["qty"]) * price * D(q["funding_rate"]) * sign
                         books[aid]["cash"] = str(D(books[aid]["cash"]) - fee)
                         current["funding_at"] = boundary
+                        current["logic_net"] = str(D(current.get("logic_net", 0)) - fee)
                         self.store.write(db, "v2_ledgers", books)
                         self.store.audit(
                             db,

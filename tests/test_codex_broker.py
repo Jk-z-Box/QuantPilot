@@ -163,10 +163,13 @@ def test_unconnected_or_dead_broker_fails_closed(broker):
         broker.status()
 
 
-def test_model_catalog_and_sandbox(broker):
+@pytest.mark.parametrize("format_name", ["opportunity_review", "strategy_review"])
+def test_model_catalog_and_sandbox(broker, format_name):
     connect(broker)
     assert broker.dispatch("models", {})["models"] == ["test-model"]
-    result = broker.dispatch("response", payload())
+    body = payload()
+    body["text"]["format"]["name"] = format_name
+    result = broker.dispatch("response", body)
     assert result["status"] == "completed"
     start = next(p for m, p in broker.rpc.calls if m == "thread/start")
     turn = next(p for m, p in broker.rpc.calls if m == "turn/start")
