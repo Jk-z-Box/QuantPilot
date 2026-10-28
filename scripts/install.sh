@@ -63,6 +63,7 @@ find "$RELEASE_DIR" -type d -name __pycache__ -prune -exec rm -rf {} +
 python3 -m venv "$RELEASE_DIR/.venv"
 "$RELEASE_DIR/.venv/bin/python" -m pip install --require-hashes -r "$RELEASE_DIR/requirements.lock"
 "$RELEASE_DIR/.venv/bin/python" -m pip install --no-deps --no-build-isolation "$RELEASE_DIR"
+chmod -R a+rX "$RELEASE_DIR"
 bash "$RELEASE_DIR/scripts/install-codex.sh"
 # Verify production RPC fields against the exact pinned binary, without user auth.
 runuser -u quantpilot-ai -- "$RELEASE_DIR/.venv/bin/python" "$RELEASE_DIR/scripts/check-codex-protocol.py"
@@ -85,7 +86,6 @@ else
 fi
 chown -R quantpilot:quantpilot "$DATA_DIR"
 chmod -R go-rwx "$DATA_DIR"
-chmod -R a+rX "$RELEASE_DIR"
 PREVIOUS="$(readlink "$ROOT_DIR/current" 2>/dev/null || true)"
 ln -s "$RELEASE_DIR" "$ROOT_DIR/current.new"
 mv -Tf "$ROOT_DIR/current.new" "$ROOT_DIR/current"
