@@ -276,7 +276,7 @@ def test_research_requires_completed_web_search_and_minimizes_sent_data(workspac
 
 
 def test_disabled_missing_key_and_provider_failure_do_not_leak(workspace):
-    with pytest.raises(ValueError, match="先保存"):
+    with pytest.raises(ValueError, match="AI 连接"):
         configure(workspace, ai_data_enabled=True, ai_model="test")
     assert workspace.research.run_once() is False
     prefs = enable_research(workspace)

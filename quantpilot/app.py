@@ -107,7 +107,8 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
                 length = int(request.headers.get("content-length", "-1"))
             except ValueError:
                 length = -1
-            if not 0 <= length <= 16384 or request.headers.get("transfer-encoding"):
+            max_body = 131072 if request.url.path == "/api/v2/chatgpt/pair/complete" else 16384
+            if not 0 <= length <= max_body or request.headers.get("transfer-encoding"):
                 return JSONResponse({"detail": "invalid_body_size"}, status_code=413)
             if request.headers.get("content-type", "").split(";")[0] != "application/json":
                 return JSONResponse({"detail": "json_required"}, status_code=415)
@@ -148,7 +149,7 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
 
     @app.get("/healthz")
     def health():
-        return {"status": "ok", "version": "0.2.2", "mode": "paper-first"}
+        return {"status": "ok", "version": "0.3.0", "mode": "paper-first"}
 
     @app.post("/api/login")
     def login(body: Login, request: Request, response: Response):

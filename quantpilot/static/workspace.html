@@ -73,7 +73,7 @@
           </div>
           <a href="/legacy" class="legacy">旧版模拟账本 ↗</a
           ><button id="logout" class="text-button">退出登录</button
-          ><small>QUANTPILOT 0.2</small>
+          ><small>QUANTPILOT 0.3</small>
         </div>
       </aside>
       <div class="main">
@@ -326,16 +326,96 @@
                   </div>
                   <span id="aiStatus" class="badge">未启用</span>
                 </div>
+                <div
+                  id="aiErrorBox"
+                  class="ai-error-panel"
+                  role="status"
+                  hidden
+                >
+                  <strong id="aiErrorTitle"></strong>
+                  <p id="aiErrorMessage"></p>
+                  <a
+                    id="aiErrorAction"
+                    href="https://platform.openai.com/settings/organization/billing/overview"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    hidden
+                    >检查 API 余额与账单 ↗</a
+                  >
+                  <small id="aiErrorCode"></small>
+                </div>
                 <p class="muted">
                   AI
                   可以修正评分、缩短有效期，并提出仓位干预。订单仍须通过账户权限和风控检查。启用后会向
                   OpenAI 发送行情、事件摘要及匿名化账户资金与持仓数据。
                 </p>
+                <div class="ai-connection-panel">
+                  <label
+                    >AI 绑定方式<select
+                      id="aiProvider"
+                      form="aiForm"
+                      name="provider"
+                    >
+                      <option value="api_key">API Key · 独立计费</option>
+                      <option value="chatgpt">
+                        OpenAI 官方登录授权 · ChatGPT 计划
+                      </option>
+                    </select></label
+                  >
+                  <p id="aiProviderHint" class="small muted"></p>
+                  <div id="chatgptPanel" hidden>
+                    <div class="section-line">
+                      <strong>ChatGPT 连接</strong
+                      ><span id="chatgptBadge" class="badge">未连接</span>
+                    </div>
+                    <label
+                      >已保存的官方账户<select id="chatgptProfile">
+                        <option value="">添加新账户</option>
+                      </select></label
+                    >
+                    <div class="connection-actions">
+                      <button type="button" id="chatgptLogin" class="primary">
+                        Continue with ChatGPT
+                      </button>
+                      <button type="button" id="chatgptUse" class="secondary">
+                        使用此账户
+                      </button>
+                      <button
+                        type="button"
+                        id="chatgptDisconnect"
+                        class="danger-outline"
+                      >
+                        断开授权
+                      </button>
+                    </div>
+                    <div class="connection-actions">
+                      <a
+                        href="https://chatgpt.com/settings/usage"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        >查看 ChatGPT 用量与授权 ↗</a
+                      >
+                      <button
+                        type="button"
+                        id="chatgptResume"
+                        class="text-button"
+                        hidden
+                      >
+                        重试授权连接
+                      </button>
+                    </div>
+                    <p class="fine">
+                      首次连接需要在浏览器所在电脑运行登录助手。登录成功后请选择模型，再启用
+                      AI。账户是否获准共享计划、可用模型及额度，以 OpenAI
+                      返回结果为准。
+                    </p>
+                  </div>
+                </div>
                 <form id="aiForm">
                   <div class="model-toolbar">
                     <label
                       >模型 ID 输入方式<select name="modelMode">
-                        <option value="list">从 API 模型列表选择</option>
+                        <option value="list">从当前连接获取模型</option>
                         <option value="custom">自定义填写</option>
                       </select></label
                     ><button id="loadModels" class="secondary" type="button">
@@ -344,13 +424,13 @@
                   </div>
                   <label id="modelListLabel"
                     >可选模型<select name="modelList">
-                      <option value="">请先保存密钥，再获取模型</option>
+                      <option value="">请先连接账户，再获取模型</option>
                     </select></label
                   >
                   <label id="modelCustomLabel"
                     >自定义模型 ID<input
                       name="model"
-                      placeholder="填写你的 API 账户可用模型 ID"
+                      placeholder="填写当前连接可用的模型 ID"
                       maxlength="100"
                       pattern="[a-zA-Z0-9_.:-]*"
                   /></label>
@@ -365,7 +445,7 @@
                     </select></label
                   ><label class="check"
                     ><input name="enabled" type="checkbox" />启用自动 AI
-                    复核（会产生 API 费用）</label
+                    复核（消耗所选连接的额度）</label
                   ><label class="check"
                     ><input
                       name="intervene"
@@ -373,7 +453,11 @@
                     />允许受风控约束的仓位干预</label
                   ><button class="primary">保存 AI 设置</button>
                 </form>
-                <form class="key-form" data-provider="openai">
+                <form
+                  id="openaiKeyForm"
+                  class="key-form"
+                  data-provider="openai"
+                >
                   <label
                     >OpenAI API Key<input
                       type="password"
@@ -409,10 +493,10 @@
                     ><input
                       name="enabled"
                       type="checkbox"
-                    />启用联网检索补全（会产生 API 和搜索费用）</label
+                    />启用联网检索补全（消耗所选连接的额度）</label
                   >
                   <p class="small muted">
-                    使用已保存的 OpenAI 密钥与模型，联网查找缺失或过期的资料。
+                    使用已保存的 AI 连接与模型，联网查找缺失或过期的资料。
                     核对原文和日期后，显示来源并计中性覆盖分。此开关独立于 AI
                     风险复核。
                   </p>
@@ -435,9 +519,19 @@
                     </button>
                   </div>
                   <p id="aiDataStatus" class="small" role="status">未启用</p>
+                  <a
+                    id="aiDataBilling"
+                    class="small"
+                    href="https://platform.openai.com/settings/organization/billing/overview"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    hidden
+                    >检查 API 余额与账单 ↗</a
+                  >
                   <p class="fine">
-                    模型需支持联网搜索。每轮最多 3 个品种、4
-                    次搜索调用，手动检索至少间隔 5 分钟。
+                    模型需支持联网搜索。每轮最多 3 个品种，手动检索至少间隔 5
+                    分钟。API Key 方式最多 4
+                    次工具调用；官方登录方式由计划用量限制管理，不承诺固定搜索次数。
                     查不到可靠资料时仍显示缺失；不补造实时行情、K
                     线或清算热力图。
                   </p>

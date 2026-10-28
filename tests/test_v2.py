@@ -873,7 +873,7 @@ def test_live_receipt_is_bound_expiring_private_and_blockable(workspace, monkeyp
     workspace.vault.put("v2:account:" + a["id"], secret)
     monkeypatch.setenv("QP_LIVE_EXECUTION", "1")
     cert = {
-        "version": "0.2.2",
+        "version": "0.3.0",
         "exchange": "binance",
         "credential_fingerprint": hashlib.sha256(json.dumps(secret, sort_keys=True).encode()).hexdigest(),
         "verified_at": time.time(),

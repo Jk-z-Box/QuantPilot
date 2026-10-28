@@ -1,4 +1,4 @@
-# QuantPilot 0.2.2
+# QuantPilot 0.3.0
 
 中文多账户永续合约研究与模拟交易工作台。先观察市场、查看评分依据，再用独立模拟资金验证。默认不发送真实订单。
 
@@ -116,3 +116,11 @@ bash scripts/check.sh
 测试结果、实际外部探测和未验证项见 [验收记录](docs/TEST_REPORT.md)，后续工作见 [交接任务](CODEX_TASKS.md)。当前项目为按需求独立建立的实现；最早的 `/mnt/data/quantpilot-starter.zip` 在此环境不可访问，未声称导入或审查过该压缩包。
 
 官方接口依据：[Gate](https://www.gate.com/docs/developers/apiv4/en/futures/)、[OKX](https://www.okx.com/docs-v5/en/)、[Binance](https://developers.binance.com/docs/derivatives/usds-margined-futures/general-info)、[Deribit](https://docs.deribit.com/api-reference/market-data/public-get_book_summary_by_currency)、[美联储](https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm)、[CoinGlass](https://docs.coinglass.com/reference/etf-flows-history)、[OpenAI](https://developers.openai.com/api/docs/guides/structured-outputs)。
+
+## 0.3.0 官方登录与明确的 AI 错误
+
+“数据与 AI”支持 API Key 和 **OpenAI 官方登录授权（Continue with ChatGPT）**。官方连接使用获准共享的 ChatGPT 计划，API Key 仍独立计费；两者不会自动回退。服务器部署需先在浏览器所在电脑完成官方 loopback OAuth，再用一次性连接码通过 HTTPS 传给本人的服务器。
+
+支持多注册账户选择、重新登录、加密保存、轮换续期、断开撤销和用量入口。完整操作见 [官方登录说明](docs/CHATGPT_LOGIN.md)。连接或切换账号会暂停 AI 自动任务与账户自动交易，需要重新选择模型和启用。API 余额不足、授权失效、计划额度耗尽、模型权限和网络错误分别提示。
+
+真实交易默认锁定。测试使用签名令牌与网络替身，不代表此账户已通过 OpenAI 的共享资格或完成真实授权。

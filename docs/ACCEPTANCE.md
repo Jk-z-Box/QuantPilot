@@ -1,6 +1,6 @@
 # 执行组件验收门槛
 
-0.2.2 已实现订单组件，但没有实际交易所账户凭据，也没有完成交易所测试网联调或独立安全审计。本版交付和生产升级均保持真实下单关闭；不能把自动测试替身的通过写成交易所认证。
+0.3.0 已实现订单组件，但没有实际交易所账户凭据，也没有完成交易所测试网联调或独立安全审计。本版交付和生产升级均保持真实下单关闭；不能把自动测试替身的通过写成交易所认证。
 
 ## 环境隔离
 
@@ -22,7 +22,7 @@
 7. 外部人工更改仓位/订单后锁定；原生保护单清理和人工接管。
 8. 独立代码审查及足够时长的模拟观测，核对真实账户风险限额和权限。
 
-管理员验收记录位于数据目录 `certifications/<account_id>.json`，权限 0600。代码检查版本 `0.2.2`、交易所、当前凭据 JSON 的 SHA-256 指纹、7 天以内的 `verified_at`，以及 `sandbox_fill`、`native_stop`、`partial_take_profit`、`reduce_only`、`reconnect_reconcile`、`timeout_no_duplicate` 均为真。记录由完成实际验收的管理员签收；系统不会根据单元测试自动生成。此机制不防御能修改主机代码的管理员。
+管理员验收记录位于数据目录 `certifications/<account_id>.json`，权限 0600。代码检查版本 `0.3.0`、交易所、当前凭据 JSON 的 SHA-256 指纹、7 天以内的 `verified_at`，以及 `sandbox_fill`、`native_stop`、`partial_take_profit`、`reduce_only`、`reconnect_reconcile`、`timeout_no_duplicate` 均为真。记录由完成实际验收的管理员签收；系统不会根据单元测试自动生成。此机制不防御能修改主机代码的管理员。
 
 ## 异常处理
 

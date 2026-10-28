@@ -66,6 +66,7 @@ def defaults():
 class Preferences(Model):
     profile: Literal["conservative", "balanced", "aggressive"] = "balanced"
     min_score: int = Field(default=80, ge=1, le=100, strict=True)
+    ai_provider: Literal["api_key", "chatgpt"] = "api_key"
     ai_enabled: bool = False
     ai_model: str = Field(default="", max_length=100, pattern=r"^[a-zA-Z0-9_.:-]*$")
     ai_interval: int = Field(default=300, ge=60, le=3600)
@@ -75,7 +76,7 @@ class Preferences(Model):
     halted: bool = False
 
 
-POLICY_KEYS = ("profile", "min_score", "ai_enabled", "ai_model", "ai_intervene", "ai_data_enabled")
+POLICY_KEYS = ("ai_provider", "profile", "min_score", "ai_enabled", "ai_model", "ai_intervene", "ai_data_enabled")
 
 
 def signal_policy(preferences):

@@ -15,7 +15,7 @@ sudo apt-get install -y python3 python3-venv python3-pip ca-certificates git
 
 ## 从交付压缩包安装
 
-解压 `QuantPilot-0.2.2.zip`，进入 `QuantPilot` 目录，运行：
+解压 `QuantPilot-0.3.0.zip`，进入 `QuantPilot` 目录，运行：
 
 ```bash
 sudo bash scripts/install.sh --port 8080 --username admin

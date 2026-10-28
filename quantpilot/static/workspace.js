@@ -254,6 +254,22 @@ function render() {
   renderAccounts();
   renderOrders();
   $("aiStatus").textContent = state.ai_status;
+  $("aiStatus").className = "badge" + (state.ai_error ? " bad" : "");
+  const failure = state.ai_error;
+  $("aiErrorBox").hidden = !failure;
+  $("aiErrorTitle").textContent = failure?.title || "";
+  $("aiErrorMessage").textContent = failure?.message || "";
+  errorAction("aiErrorAction", failure);
+  renderChatGPT();
+  $("aiErrorCode").textContent = failure
+    ? [
+        failure.http_status ? `HTTP ${failure.http_status}` : "",
+        failure.provider_code,
+        failure.checked_at ? time(failure.checked_at) : "",
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
 }
 function renderTiles() {
   $("watchTiles").innerHTML = state.watchlist
@@ -1012,13 +1028,157 @@ $("editWatch").onclick = () => {
         result.map((x) => x.symbol).join(" · ") || "没有匹配的已上市合约";
     });
 };
+let chatgptPairBaseline = null;
+function connectionReady(provider) {
+  return provider === "chatgpt" ? state.chatgpt?.ready : state.ai_key_saved;
+}
+function errorAction(id, error) {
+  const link = $(id),
+    allowed = [
+      "https://chatgpt.com/settings/usage",
+      "https://platform.openai.com/settings/organization/billing/overview",
+    ];
+  link.hidden = !allowed.includes(error?.action_url);
+  if (!link.hidden) {
+    link.href = error.action_url;
+    link.textContent = error.action_label + " ↗";
+  }
+}
+function toggleProvider() {
+  const official = $("aiProvider").value === "chatgpt";
+  $("chatgptPanel").hidden = !official;
+  $("openaiKeyForm").hidden = official;
+  $("aiProviderHint").textContent = official
+    ? "使用获准共享的 ChatGPT 计划额度。Plus 用量与其他应用共享；不会自动切换到 API Key。"
+    : "使用 OpenAI API 余额，账单与 ChatGPT Plus 订阅分开。";
+  renderChatGPT();
+}
+function renderChatGPT() {
+  if (!state?.chatgpt) return;
+  const c = state.chatgpt,
+    select = $("chatgptProfile"),
+    previous = select.value;
+  const signature =
+    JSON.stringify(c.profiles.map((p) => [p.id, p.label, p.connected])) +
+    c.active;
+  if (select.dataset.signature !== signature) {
+    select.innerHTML =
+      '<option value="">添加新账户</option>' +
+      c.profiles
+        .map(
+          (p) =>
+            `<option value="${esc(p.id)}">${esc(p.label)}${p.id === c.active ? " · 当前账户" : ""}${p.connected ? "" : " · 已断开"}</option>`,
+        )
+        .join("");
+    select.value = c.profiles.some((p) => p.id === previous)
+      ? previous
+      : c.active || "";
+    select.dataset.signature = signature;
+  }
+  const selectedProfile = c.profiles.find((p) => p.id === select.value),
+    active = c.profiles.find((p) => p.id === c.active);
+  $("chatgptUse").disabled =
+    !selectedProfile?.connected || select.value === c.active;
+  $("chatgptDisconnect").disabled = !selectedProfile?.connected;
+  $("chatgptBadge").textContent = c.ready
+    ? "已连接 · 使用 ChatGPT 计划"
+    : active?.paused === "plan_limit"
+      ? "共享额度已用完"
+      : active?.connected
+        ? "需检查计划授权"
+        : "未连接";
+  $("chatgptBadge").className = "badge" + (c.ready ? " good" : "");
+  $("chatgptResume").hidden = !active?.connected || !active?.paused;
+  if (
+    chatgptPairBaseline !== null &&
+    c.revision !== chatgptPairBaseline &&
+    $("dialog").open &&
+    $("chatgptPairCode")
+  ) {
+    chatgptPairBaseline = null;
+    $("chatgptPairCode").value = "";
+    $("dialog").close();
+    fillSettings();
+    toast("官方登录已连接，请获取模型并保存 AI 设置；自动交易已暂停");
+  }
+}
+$("chatgptProfile").onchange = renderChatGPT;
+$("aiProvider").onchange = () => {
+  modelLoaded = false;
+  const f = $("aiForm");
+  f.model.value = "";
+  f.modelList.innerHTML = '<option value="">请重新获取当前连接的模型</option>';
+  f.enabled.checked = false;
+  f.intervene.checked = false;
+  $("modelMessage").textContent =
+    "绑定方式已更改，选择模型后保存生效。切换连接会暂停账户自动交易。";
+  toggleProvider();
+};
+$("chatgptLogin").onclick = () =>
+  action(async () => {
+    const result = await api("/api/v2/chatgpt/pair", {
+      profile_id: $("chatgptProfile").value,
+    });
+    chatgptPairBaseline = state.chatgpt?.revision || "initial";
+    modal(
+      "OpenAI 官方登录授权",
+      `<p>在运行浏览器的电脑上启动 QuantPilot 登录助手，随后只在 OpenAI 官方页面登录并确认授权。</p><ol class="login-steps"><li>在本机终端运行：<code id="chatgptCommand"></code><small>需先安装 QuantPilot；已部署在远程服务器上的程序不能代替本机助手。<a href="https://github.com/Jk-z-Box/QuantPilot/blob/feat/mission-control-v2/docs/CHATGPT_LOGIN.md" target="_blank" rel="noopener noreferrer">安装与使用说明 ↗</a></small></li><li>助手提示时粘贴下方一次性连接码：<input id="chatgptPairCode" type="password" readonly autocomplete="off" aria-label="一次性连接码"><button type="button" id="copyPairCode" class="secondary">复制连接码</button><small>10 分钟内有效，仅限本次连接。不要发送给其他人。</small></li><li>在 OpenAI 页面选择你的 ChatGPT 账户，确认允许 QuantPilot 使用计划。成功后返回此页面选择模型。</li></ol><p class="fine">登录成功会暂停账户自动交易及 AI 自动任务，供你核对连接和模型。官方授权不支持时会明确报错。</p><div class="dialog-footer"><button id="closePair" class="secondary">关闭</button></div>`,
+    );
+    $("chatgptCommand").textContent =
+      "qp chatgpt-login --server " + location.origin;
+    $("chatgptPairCode").value = result.pair_code;
+    $("copyPairCode").onclick = () =>
+      action(async () => {
+        await navigator.clipboard.writeText($("chatgptPairCode").value);
+        toast("连接码已复制，请粘贴到本机登录助手");
+      });
+    $("closePair").onclick = () => {
+      $("chatgptPairCode").value = "";
+      $("dialog").close();
+    };
+  });
+$("chatgptUse").onclick = () =>
+  action(async () => {
+    await api("/api/v2/chatgpt/select", {
+      profile_id: $("chatgptProfile").value,
+    });
+    await refresh();
+    modelLoaded = false;
+    fillSettings();
+    toast("账户已切换，请重新选择模型；自动交易已暂停");
+  });
+$("chatgptResume").onclick = () =>
+  action(async () => {
+    await api("/api/v2/chatgpt/resume", {});
+    await refresh();
+    toast("已允许重试，请重新获取模型或发起复核");
+  });
+$("chatgptDisconnect").onclick = () => {
+  const id = $("chatgptProfile").value;
+  modal(
+    "断开官方授权",
+    '<p>断开后会清除服务器上的登录凭据，并尝试撤销 OpenAI 会话。如果这是当前 AI 连接，AI 功能及账户自动交易将暂停。</p><div class="dialog-footer"><button id="cancelDisconnect" class="secondary">取消</button><button id="confirmDisconnect" class="danger-outline">确认断开</button></div>',
+  );
+  $("cancelDisconnect").onclick = () => $("dialog").close();
+  $("confirmDisconnect").onclick = () =>
+    action(async () => {
+      const result = await api("/api/v2/chatgpt/profiles/" + id, {}, "DELETE");
+      $("dialog").close();
+      await refresh();
+      modelLoaded = false;
+      fillSettings();
+      toast(result.message);
+    });
+};
 function fillSettings() {
   if (!state) return;
   const f = $("aiForm");
+  $("aiProvider").value = state.preferences.ai_provider || "api_key";
+  toggleProvider();
   f.model.value = state.preferences.ai_model;
   f.modelMode.value = "custom";
   toggleModelMode();
-  if (state.ai_key_saved && !modelLoaded) loadModels(false);
+  if (connectionReady($("aiProvider").value) && !modelLoaded) loadModels(false);
   f.interval.value = state.preferences.ai_interval;
   f.enabled.checked = state.preferences.ai_enabled;
   f.intervene.checked = state.preferences.ai_intervene;
@@ -1063,6 +1223,7 @@ function renderAIDataStatus() {
     (status.last_attempt ? " · 最近尝试 " + time(status.last_attempt) : "");
   $("requestAIData").disabled =
     !state.preferences.ai_data_enabled || status.state === "running";
+  errorAction("aiDataBilling", status.state === "error" ? status.error : null);
 }
 $("aiDataForm").onsubmit = (e) => {
   e.preventDefault();
@@ -1070,9 +1231,10 @@ $("aiDataForm").onsubmit = (e) => {
   action(async () => {
     if (
       f.enabled.checked &&
-      (!state.ai_key_saved || !state.preferences.ai_model)
+      (!connectionReady(state.preferences.ai_provider) ||
+        !state.preferences.ai_model)
     )
-      throw Error("请先保存 OpenAI API Key 和模型，再开启数据补全");
+      throw Error("请先保存可用的 AI 连接和模型，再开启数据补全");
     await api(
       "/api/v2/preferences",
       {
@@ -1104,6 +1266,11 @@ $("aiForm").onsubmit = (e) => {
       "/api/v2/preferences",
       {
         ...state.preferences,
+        ai_provider: $("aiProvider").value,
+        ai_data_enabled:
+          state.preferences.ai_provider === $("aiProvider").value
+            ? state.preferences.ai_data_enabled
+            : false,
         ai_model:
           f.modelMode.value === "list"
             ? f.modelList.value
@@ -1114,7 +1281,11 @@ $("aiForm").onsubmit = (e) => {
       },
       "PUT",
     );
-    toast("AI 设置已保存");
+    toast(
+      state.preferences.ai_provider !== $("aiProvider").value
+        ? "连接方式已切换，自动交易已暂停，请重新核对设置"
+        : "AI 设置已保存",
+    );
     await refresh();
   });
 };
@@ -1131,7 +1302,11 @@ document.querySelectorAll(".key-form").forEach(
         await refresh();
         modelLoaded = false;
         updateKeyStatus();
-        if (f.dataset.provider === "openai") await loadModels(true);
+        if (
+          f.dataset.provider === "openai" &&
+          $("aiProvider").value === "api_key"
+        )
+          await loadModels(true);
       });
     }),
 );
@@ -1166,12 +1341,14 @@ async function loadModels(selectList = true) {
   const button = $("loadModels");
   if (button.disabled) return;
   button.disabled = true;
-  $("modelMessage").textContent = "正在从 API 读取模型…";
+  $("modelMessage").textContent = "正在从所选连接读取模型…";
   const f = $("aiForm"),
     current =
       f.modelMode.value === "list" ? f.modelList.value : f.model.value.trim();
+  const provider = $("aiProvider").value;
   try {
-    const result = await api("/api/v2/models");
+    const result = await api("/api/v2/models?provider=" + provider);
+    if ($("aiProvider").value !== provider) return;
     modelLoaded = true;
     f.modelList.innerHTML =
       '<option value="">请选择模型</option>' +
@@ -1183,6 +1360,7 @@ async function loadModels(selectList = true) {
       f.modelMode.value = "list";
     $("modelMessage").textContent = result.note;
   } catch (e) {
+    if ($("aiProvider").value !== provider) return;
     f.modelMode.value = "custom";
     $("modelMessage").textContent = e.message + "。已切换为自定义填写。";
   } finally {
@@ -1213,7 +1391,7 @@ document.querySelectorAll("[data-delete-key]").forEach(
       const provider = b.dataset.deleteKey;
       modal(
         "删除 API 密钥",
-        `<p>确认删除 ${esc(provider)} 的服务器端密钥？</p><p class="muted">${provider === "openai" ? "删除后关闭 AI 复核、AI 干预和联网数据补全。" : "删除后仅保留可用的公开数据来源。"}已有订单保护继续运行。</p><div class="dialog-footer"><button class="secondary" id="cancelKeyDelete">取消</button><button class="danger-outline" id="confirmKeyDelete">确认删除密钥</button></div>`,
+        `<p>确认删除 ${esc(provider)} 的服务器端密钥？</p><p class="muted">${provider === "openai" ? "当前使用 API Key 时，删除会关闭 AI 功能；官方登录连接独立保留。" : "删除后仅保留可用的公开数据来源。"}已有订单保护继续运行。</p><div class="dialog-footer"><button class="secondary" id="cancelKeyDelete">取消</button><button class="danger-outline" id="confirmKeyDelete">确认删除密钥</button></div>`,
       );
       $("cancelKeyDelete").onclick = () => $("dialog").close();
       $("confirmKeyDelete").onclick = () =>
@@ -1222,7 +1400,10 @@ document.querySelectorAll("[data-delete-key]").forEach(
           $("dialog").close();
           await refresh();
           updateKeyStatus();
-          if (provider === "openai") {
+          if (
+            provider === "openai" &&
+            state.preferences.ai_provider === "api_key"
+          ) {
             modelLoaded = false;
             $("aiForm").enabled.checked = false;
             $("aiForm").intervene.checked = false;

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import time
+from typing import Literal
 
-from fastapi import Depends, HTTPException
-from pydantic import Field
+from fastapi import Depends, HTTPException, Request
+from pydantic import Field, SecretStr
 
 from .ai import list_models
 from .models import Account, AccountSecrets, Evidence, Instrument, KeyInput, Model, Preferences, Reset
@@ -18,6 +19,25 @@ class Close(Model):
     ratio: float = Field(default=1, gt=0, le=1)
 
 
+class ChatGPTProfile(Model):
+    profile_id: str = Field(default="", pattern=r"^[a-f0-9]{0,24}$")
+
+
+class OAuthTokens(Model):
+    access_token: SecretStr = Field(min_length=1, max_length=32768)
+    refresh_token: SecretStr = Field(min_length=1, max_length=32768)
+    id_token: SecretStr = Field(min_length=1, max_length=32768)
+    token_type: Literal["Bearer", "bearer"]
+    expires_in: float = Field(gt=0, le=86400)
+    scope: str = Field(max_length=4096)
+    earliest_refresh_at: float = Field(default=0, ge=0)
+
+
+class OAuthImport(Model):
+    client_id: str = Field(pattern=r"^oaiapp_[A-Za-z0-9_-]{1,240}$")
+    tokens: OAuthTokens
+
+
 def install(app, workspace, session, mutation):
     def safe(fn, *args):
         try:
@@ -30,8 +50,49 @@ def install(app, workspace, session, mutation):
         return workspace.state()
 
     @app.get("/api/v2/models", dependencies=[Depends(session)])
-    def models():
-        return safe(list_models, workspace.vault)
+    def models(provider: Literal["api_key", "chatgpt"] = "api_key"):
+        return safe(lambda: list_models(workspace.vault, provider=provider))
+
+    @app.post("/api/v2/chatgpt/pair", dependencies=[Depends(mutation)])
+    def start_pair(body: ChatGPTProfile):
+        return safe(workspace.chatgpt.start_pair, body.profile_id)
+
+    def pair_code(request):
+        header = request.headers.get("authorization", "")
+        if not header.startswith("Bearer "):
+            raise HTTPException(401, "连接码缺失")
+        return header[7:]
+
+    @app.post("/api/v2/chatgpt/pair/context")
+    def pair_context(request: Request):
+        return safe(workspace.chatgpt.pair_context, pair_code(request))
+
+    @app.post("/api/v2/chatgpt/pair/complete")
+    def complete_pair(body: OAuthImport, request: Request):
+        tokens = body.tokens.model_dump()
+        for k in ("access_token", "refresh_token", "id_token"):
+            tokens[k] = tokens[k].get_secret_value()
+        result = safe(workspace.chatgpt.complete_pair, pair_code(request), body.client_id, tokens)
+        workspace.auth_changed()
+        return result
+
+    @app.post("/api/v2/chatgpt/select", dependencies=[Depends(mutation)])
+    def select_profile(body: ChatGPTProfile):
+        result = safe(workspace.chatgpt.select, body.profile_id)
+        workspace.auth_changed()
+        return result
+
+    @app.post("/api/v2/chatgpt/resume", dependencies=[Depends(mutation)])
+    def resume_chatgpt():
+        result = safe(workspace.chatgpt.resume)
+        workspace.auth_changed()
+        return result
+
+    @app.delete("/api/v2/chatgpt/profiles/{profile_id}", dependencies=[Depends(mutation)])
+    def disconnect_profile(profile_id: str):
+        result = safe(workspace.chatgpt.disconnect, profile_id)
+        workspace.auth_changed()
+        return result
 
     @app.get("/api/v2/limits/{instrument_id}", dependencies=[Depends(session)])
     def limits(instrument_id: str, exchange: str = "binance", account_id: str = ""):
@@ -132,7 +193,8 @@ def install(app, workspace, session, mutation):
         )
         workspace.feeds.cache.clear()
         if provider == "openai":
-            workspace.research.invalidate()
+            if workspace.store.get("v2_preferences")["ai_provider"] == "api_key":
+                workspace.auth_changed()
         return {"saved": True}
 
     @app.delete("/api/v2/keys/{provider}", dependencies=[Depends(mutation)])

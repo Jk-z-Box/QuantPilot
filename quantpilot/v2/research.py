@@ -7,7 +7,6 @@ or execute orders. Retrieved pages are untrusted, never executable instructions.
 from __future__ import annotations
 
 import datetime as dt
-import hashlib
 import json
 import re
 import threading
@@ -20,6 +19,9 @@ from zoneinfo import ZoneInfo
 import httpx
 from pydantic import Field
 
+from .ai_client import fingerprint
+from .ai_client import response as request_response
+from .ai_errors import AIError, http_error
 from .models import Model
 
 DOMAINS = {
@@ -218,9 +220,8 @@ def verify_observation(row, item, sources, now, transport=None):
 
 
 def research(preferences, vault, requests, transport=None, source_transport=None):
-    key = vault.get("v2:ai:openai")
-    if not preferences["ai_data_enabled"] or not key or not preferences["ai_model"]:
-        raise ValueError("请先保存 OpenAI 密钥、模型并开启 AI 数据补全")
+    if not preferences["ai_data_enabled"] or not preferences["ai_model"]:
+        raise ValueError("请先设置 AI 连接、模型并开启 AI 数据补全")
     if not requests:
         return {"observations": [], "rejected": 0}
     # This request contains public market identifiers only, never account balances or credentials.
@@ -252,16 +253,10 @@ def research(preferences, vault, requests, transport=None, source_transport=None
         },
     }
     try:
-        with httpx.Client(timeout=45, transport=transport, follow_redirects=False) as client:
-            response = client.post(
-                "https://api.openai.com/v1/responses",
-                json=payload,
-                headers={"Authorization": "Bearer " + key["apiKey"]},
-            )
-            response.raise_for_status()
-            body = response.json()
+        body = request_response(preferences, vault, payload, transport, timeout=45)
         if body.get("status") != "completed":
-            raise ValueError("incomplete")
+            reason = (body.get("incomplete_details") or {}).get("reason")
+            raise AIError("output_limit" if reason == "max_output_tokens" else "incomplete")
         calls = [
             o
             for o in body.get("output", [])
@@ -283,6 +278,14 @@ def research(preferences, vault, requests, transport=None, source_transport=None
             if c.get("type") == "output_text"
         )
         rows = ResearchResult.model_validate_json(text).model_dump()["observations"]
+    except AIError:
+        raise
+    except httpx.HTTPStatusError as exc:
+        raise http_error(exc.response) from None
+    except httpx.TimeoutException:
+        raise AIError("timeout") from None
+    except httpx.RequestError:
+        raise AIError("network") from None
     except Exception:
         raise ValueError(
             "联网补全失败：请检查所选模型是否支持 web_search、API 权限或额度；缺失数据保持缺失"
@@ -314,12 +317,7 @@ class ResearchEngine:
         self.invalidate()
 
     def context(self, prefs):
-        key = self.vault.get("v2:ai:openai") or {}
-        return (
-            prefs["ai_data_enabled"],
-            prefs["ai_model"],
-            hashlib.sha256(key.get("apiKey", "").encode()).hexdigest(),
-        )
+        return (prefs["ai_data_enabled"], prefs["ai_model"], fingerprint(prefs, self.vault))
 
     def invalidate(self):
         with self.guard, self.store.transaction() as db:
@@ -332,6 +330,7 @@ class ResearchEngine:
                     "state": "idle" if prefs["ai_data_enabled"] else "disabled",
                     "message": "等待检索缺失数据" if prefs["ai_data_enabled"] else "AI 数据补全未启用",
                     "accepted": 0,
+                    "error": None,
                 }
             )
             self.store.write(db, "v2_ai_data_status", status)
@@ -415,7 +414,12 @@ class ResearchEngine:
                 return False
             self.running, generation = True, self.generation
             status.update(
-                {"state": "running", "message": "正在联网查找并核对来源…", "last_attempt": time.time()}
+                {
+                    "state": "running",
+                    "message": "正在联网查找并核对来源…",
+                    "last_attempt": time.time(),
+                    "error": None,
+                }
             )
             with self.store.transaction() as db:
                 self.store.write(db, "v2_ai_data_status", status)
@@ -460,6 +464,7 @@ class ResearchEngine:
                             "accepted": len(rows),
                             "rejected": result["rejected"],
                             "completed_at": time.time(),
+                            "error": None,
                         }
                     )
                     self.store.write(db, "v2_ai_data_status", status)
@@ -468,13 +473,15 @@ class ResearchEngine:
                     )
             self.workspace.last_evaluation = 0
             return True
-        except Exception:
+        except Exception as exc:
             with self.guard:
                 if generation == self.generation and not self.workspace.stop_event.is_set():
+                    error = exc if isinstance(exc, AIError) else AIError("invalid_response")
                     status.update(
                         {
                             "state": "error",
-                            "message": "补全失败：请检查模型的联网搜索支持、API 权限与额度。未获取到的数据保持缺失。",
+                            "message": str(error),
+                            "error": error.public(),
                         }
                     )
                     with self.store.transaction() as db:

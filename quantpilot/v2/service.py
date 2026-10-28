@@ -9,6 +9,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .accounts import PaperBroker, ledger, valuation
 from .ai import apply_revision, review
+from .ai_client import fingerprint, ready
+from .ai_errors import AIError
+from .chatgpt import ChatGPTConnection
 from .execution import ExchangeBroker
 from .feeds import Feeds
 from .limits import contract_limits
@@ -30,6 +33,7 @@ class Workspace:
         self.quote_thread = None
         self.last_evaluation, self.last_ai = 0, 0
         self.ai_status = "未启用"
+        self.ai_error = None
         self.ai_cache = {}
         with store.transaction() as db:
             db.execute(
@@ -66,7 +70,20 @@ class Workspace:
                     account["capital"] = None
             self.store.write(db, "v2_accounts", accounts)
             self.store.write(db, "v2_sizing_migration", migrated)
+        self.chatgpt = ChatGPTConnection(vault)
         self.research = ResearchEngine(self)
+
+    def auth_changed(self):
+        with self.lock:
+            self.ai_cache.clear()
+            self.ai_error = None
+            self.last_evaluation = 0
+            self.ai_status = "连接已更新，请选择模型并保存 AI 设置"
+            for op in self.opportunities.values():
+                op["valid"] = False
+                op.pop("ai", None)
+                op["blockers"] = ["AI 连接已变更，等待重新评估"]
+        self.research.invalidate()
 
     def limits(self, instrument_id, exchange, aid=""):
         item = next((i for i in self.store.get("v2_watchlist") if i["id"] == instrument_id), None)
@@ -240,7 +257,7 @@ class Workspace:
         return {"saved": True}
 
     def delete_key(self, provider):
-        if provider == "openai":
+        if provider == "openai" and self.store.get("v2_preferences")["ai_provider"] == "api_key":
             prefs = self.store.get("v2_preferences")
             self.preferences({**prefs, "ai_enabled": False, "ai_intervene": False, "ai_data_enabled": False})
             self.ai_status = "未启用 · 密钥已删除"
@@ -270,12 +287,17 @@ class Workspace:
     def preferences(self, prefs):
         prefs = Preferences.model_validate(prefs).model_dump()
         if (prefs["ai_enabled"] or prefs["ai_data_enabled"]) and (
-            not prefs["ai_model"] or not self.vault.get("v2:ai:openai")
+            not prefs["ai_model"] or not ready(prefs, self.vault)
         ):
-            raise ValueError("先保存 OpenAI 密钥并填写模型")
+            raise ValueError("请先完成所选 AI 连接并选择模型；官方登录需获准使用 ChatGPT 计划")
         with self.store.transaction() as db:
             previous = self.store.read(db, "v2_preferences")
             self.store.write(db, "v2_preferences", prefs)
+            if previous["ai_provider"] != prefs["ai_provider"]:
+                accounts = self.store.read(db, "v2_accounts")
+                for account in accounts.values():
+                    account["auto"] = False
+                self.store.write(db, "v2_accounts", accounts)
             self.store.write(db, "kill", prefs["halted"])
             if prefs["halted"]:
                 strategy = self.store.read(db, "strategy")
@@ -292,14 +314,23 @@ class Workspace:
         with self.lock:
             if previous["profile"] != prefs["profile"] or any(
                 previous[k] != prefs[k]
-                for k in ("ai_enabled", "ai_model", "ai_intervene", "min_score", "ai_data_enabled")
+                for k in (
+                    "ai_provider",
+                    "ai_enabled",
+                    "ai_model",
+                    "ai_intervene",
+                    "min_score",
+                    "ai_data_enabled",
+                )
             ):
                 for op in self.opportunities.values():
                     op["valid"] = False
                     op["blockers"] = ["风险配置已变更，等待重新评估"]
                     op["reasons"] = []
                 self.ai_cache.clear()
-        if any(previous[k] != prefs[k] for k in ("ai_model", "ai_data_enabled")):
+                self.ai_error = None
+                self.ai_status = "等待复核" if prefs["ai_enabled"] else "未启用"
+        if any(previous[k] != prefs[k] for k in ("ai_provider", "ai_model", "ai_data_enabled")):
             self.research.invalidate()
         self.last_evaluation = 0
         return prefs
@@ -365,6 +396,7 @@ class Workspace:
                     for k in (
                         "profile",
                         "min_score",
+                        "ai_provider",
                         "ai_enabled",
                         "ai_model",
                         "ai_intervene",
@@ -399,7 +431,8 @@ class Workspace:
             try:
                 self.review_ai(prefs)
             except ValueError:
-                self.ai_status = "AI 复核失败；已有仓位保护继续运行"
+                if self.ai_error is None:
+                    self.ai_status = "AI 复核暂未完成；已有仓位保护继续运行"
 
     def fast_tick(self):
         items = self.store.get("v2_watchlist")
@@ -427,6 +460,7 @@ class Workspace:
             self.last_ai = time.time()
             opportunities = copy.deepcopy(list(self.opportunities.values()))
             reviewed_ids = {op["instrument_id"]: op.get("id") for op in opportunities}
+        context = fingerprint(prefs, self.vault)
         try:
             risk = []
             for index, (_aid, book) in enumerate(self.store.get("v2_ledgers").items()):
@@ -457,6 +491,7 @@ class Workspace:
                         key in self.opportunities
                         and self.opportunities[key].get("id") == reviewed_ids.get(key)
                         and self.store.get("v2_preferences") == prefs
+                        and context == fingerprint(prefs, self.vault)
                     ):
                         stamp = time.time()
                         self.ai_cache[key] = {
@@ -467,10 +502,23 @@ class Workspace:
                         self.opportunities[key] = apply_revision(
                             self.opportunities[key], revision, stamp, prefs["ai_intervene"]
                         )
-            self.ai_status = "已完成风险复核"
+            if self.store.get("v2_preferences") == prefs and context == fingerprint(prefs, self.vault):
+                self.ai_status = "已完成风险复核"
+                self.ai_error = None
             self.store.record("v2_ai_review", {"count": len(revisions)})
-        except ValueError:
-            self.ai_status = "AI 不可用；新开仓等待复核，已有保护继续"
+        except ValueError as exc:
+            error = exc if isinstance(exc, AIError) else AIError("invalid_response")
+            # Ignore failures from a request whose settings were changed while in flight.
+            if self.store.get("v2_preferences") == prefs:
+                with self.lock:
+                    self.ai_cache.clear()
+                    for op in self.opportunities.values():
+                        op.pop("ai", None)
+                self.ai_error = {**error.public(), "checked_at": time.time()}
+                self.ai_status = error.title
+                self.store.record(
+                    "v2_ai_review_failed", {"kind": error.kind, "http_status": error.http_status}
+                )
             raise
         return {"status": self.ai_status}
 
@@ -561,7 +609,7 @@ class Workspace:
                 for r in db.execute("SELECT * FROM v2_orders ORDER BY created DESC LIMIT 100")
             ]
         return {
-            "version": "0.2.2",
+            "version": "0.3.0",
             "now": now,
             "demo": self.market.demo,
             "watchlist": self.store.get("v2_watchlist"),
@@ -574,10 +622,12 @@ class Workspace:
                 k: v["account"]["name"] for k, v in self.store.get("v2_archived_accounts").items()
             },
             "ai_status": self.ai_status,
+            "ai_error": copy.deepcopy(self.ai_error),
             "ai_data_status": self.store.get("v2_ai_data_status"),
             "ai_data_evidence": self.research.observations(),
             "last_evaluation": self.last_evaluation,
             "providers": {name: bool(self.vault.get("v2:feed:" + name)) for name in ("coinglass", "finnhub")},
+            "chatgpt": self.chatgpt.status(),
             "ai_key_saved": bool(self.vault.get("v2:ai:openai")),
         }
 

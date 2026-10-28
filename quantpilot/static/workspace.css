@@ -1622,3 +1622,62 @@ dialog[open] {
     padding: 6px;
   }
 }
+
+.ai-connection-panel {
+  margin: 20px 0;
+  padding: 18px;
+  border: 1px solid var(--line, #dbe6e2);
+  border-radius: 12px;
+  background: #f6faf8;
+}
+.connection-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 14px 0;
+}
+.connection-actions a {
+  font-size: 12px;
+}
+.ai-error-panel {
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid #e8c5bc;
+  border-radius: 10px;
+  background: #fff7f3;
+  color: #8b3d2c;
+  overflow-wrap: anywhere;
+}
+.ai-error-panel p {
+  margin: 8px 0;
+  line-height: 1.7;
+}
+.ai-error-panel small {
+  display: block;
+  margin-top: 8px;
+}
+.login-steps {
+  padding-left: 24px;
+}
+.login-steps li {
+  margin-bottom: 20px;
+  line-height: 1.7;
+}
+.login-steps code {
+  display: block;
+  padding: 12px;
+  margin: 8px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: #f0f5f3;
+  border-radius: 8px;
+}
+.login-steps small {
+  display: block;
+  color: #687f77;
+}
+#chatgptPairCode {
+  margin: 8px 0;
+  font-family: monospace;
+}

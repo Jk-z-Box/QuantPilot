@@ -7,23 +7,36 @@ from typing import Literal
 import httpx
 from pydantic import Field, model_validator
 
+from .ai_client import credential
+from .ai_client import response as request_response
+from .ai_errors import AIError, http_error
 from .models import PROFILES, Model
 
 
-def list_models(vault, transport=None):
-    secret = vault.get("v2:ai:openai")
-    if not secret:
-        raise ValueError("请先保存 OpenAI API Key；也可以直接填写模型 ID")
+def list_models(vault, transport=None, provider="api_key"):
+    token, auth = credential({"ai_provider": provider}, vault, transport)
+    context = auth.fingerprint() if auth else None
     try:
         with httpx.Client(timeout=12, transport=transport, follow_redirects=False) as client:
             response = client.get(
-                "https://api.openai.com/v1/models", headers={"Authorization": "Bearer " + secret["apiKey"]}
+                "https://api.openai.com/v1/models", headers={"Authorization": "Bearer " + token}
             )
-            response.raise_for_status()
+            if not response.is_success:
+                raise http_error(response, oauth=bool(auth))
+            body = response.json()
+        if auth:
+            ids = [
+                m["slug"]
+                for m in body["models"]
+                if m.get("visibility") == "list"
+                and isinstance(m.get("slug"), str)
+                and re.fullmatch(r"[a-zA-Z0-9_.:-]{1,100}", m["slug"])
+            ]
+        else:
             ids = sorted(
                 {
                     m["id"]
-                    for m in response.json()["data"]
+                    for m in body["data"]
                     if isinstance(m.get("id"), str) and re.fullmatch(r"[a-zA-Z0-9_.:-]{1,100}", m["id"])
                 }
             )
@@ -31,10 +44,21 @@ def list_models(vault, transport=None):
             raise ValueError("empty")
         return {
             "models": ids[:500],
-            "note": "API 返回账户可见模型；请选择支持 Responses 和结构化输出的文本模型。",
+            "provider": provider,
+            "note": "当前 ChatGPT 授权可用模型，使用 ChatGPT 计划额度。"
+            if auth
+            else "API 返回账户可见模型；列表可读取不代表 API 余额充足。请选择支持 Responses 和结构化输出的文本模型。",
         }
+    except AIError as exc:
+        if auth:
+            auth.note_error(exc, context)
+        raise
+    except httpx.TimeoutException:
+        raise AIError("timeout") from None
+    except httpx.RequestError:
+        raise AIError("network") from None
     except Exception:
-        raise ValueError("模型列表获取失败，请检查 API 权限或使用自定义模型 ID") from None
+        raise ValueError("模型列表获取失败，请检查连接权限或使用自定义模型 ID") from None
 
 
 class Target(Model):
@@ -65,9 +89,8 @@ class Review(Model):
 
 
 def review(preferences, vault, opportunities, transport=None, risk=None):
-    secret = vault.get("v2:ai:openai")
-    if not secret or not preferences["ai_model"]:
-        raise ValueError("未配置 OpenAI 密钥或模型")
+    if not preferences["ai_model"]:
+        raise ValueError("请先选择模型")
     data = [
         {
             k: v
@@ -102,16 +125,17 @@ def review(preferences, vault, opportunities, transport=None, risk=None):
         },
     }
     try:
-        with httpx.Client(timeout=25, transport=transport, follow_redirects=False) as client:
-            response = client.post(
-                "https://api.openai.com/v1/responses",
-                json=payload,
-                headers={"Authorization": "Bearer " + secret["apiKey"]},
-            )
-            response.raise_for_status()
-            body = response.json()
+        body = request_response(preferences, vault, payload, transport, timeout=45)
         if body.get("status") != "completed":
-            raise ValueError("不完整响应")
+            reason = (body.get("incomplete_details") or {}).get("reason")
+            raise AIError("output_limit" if reason == "max_output_tokens" else "incomplete")
+        if any(
+            p.get("type") == "refusal"
+            for m in body.get("output", [])
+            if m.get("type") == "message"
+            for p in m.get("content", [])
+        ):
+            raise AIError("refused")
         text = "".join(
             p["text"]
             for m in body.get("output", [])
@@ -126,8 +150,16 @@ def review(preferences, vault, opportunities, transport=None, risk=None):
         ):
             raise ValueError("AI 返回未知交易对")
         return result
+    except AIError:
+        raise
+    except httpx.HTTPStatusError as exc:
+        raise http_error(exc.response) from None
+    except httpx.TimeoutException:
+        raise AIError("timeout") from None
+    except httpx.RequestError:
+        raise AIError("network") from None
     except Exception:
-        raise ValueError("AI 服务不可用或结果未通过验证") from None
+        raise AIError("invalid_response") from None
 
 
 def apply_revision(op, revision, now, intervene):

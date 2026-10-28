@@ -109,9 +109,17 @@ def main(argv=None):
     cf.add_argument("--port", type=int, required=True)
     back = sub.add_parser("backup")
     back.add_argument("--output", type=Path)
+    chatgpt = sub.add_parser("chatgpt-login", help="在运行浏览器的电脑上完成 OpenAI 官方登录，再连接自托管服务器")
+    chatgpt.add_argument("--server", required=True)
+    chatgpt.add_argument("--local-data", type=Path)
+    chatgpt.add_argument("--no-browser", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     os.umask(0o077)
     try:
+        if args.command == "chatgpt-login":
+            from .chatgpt_login import login
+
+            return login(args)
         if args.command == "init":
             initialize(args)
             return 0

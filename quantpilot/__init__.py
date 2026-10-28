@@ -1,3 +1,3 @@
 """QuantPilot: exchange connectivity with a paper-only execution boundary."""
 
-__version__ = "0.2.2"
+__version__ = "0.3.0"

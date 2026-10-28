@@ -224,7 +224,7 @@ def test_model_discovery_and_safe_failure(workspace):
         )
 
     assert list_models(workspace.vault, httpx.MockTransport(respond))["models"] == ["model-a", "model-z"]
-    with pytest.raises(ValueError, match="自定义") as e:
+    with pytest.raises(ValueError, match="权限受限") as e:
         list_models(
             workspace.vault,
             httpx.MockTransport(lambda req: httpx.Response(403, text="model-list-test-secret")),
