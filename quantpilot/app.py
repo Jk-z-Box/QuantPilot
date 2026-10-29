@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from .admin_api import install as install_admin
 from .advisor import advise
 from .config import EXCHANGES, Settings, config_path, load_settings, update_settings, verify_password
 from .engine import Engine, OrderRequest
@@ -24,6 +25,8 @@ from .market import TIMEFRAMES, Market, MarketError, decimal
 from .runner import Runner
 from .store import Store, Vault
 from .strategy import analyze
+from .v2.api import install as install_v2
+from .v2.service import Workspace
 
 
 class StrictModel(BaseModel):
@@ -71,6 +74,7 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
     market = market or Market(settings, vault)
     engine = Engine(settings, store, market)
     runner = Runner(engine)
+    workspace = Workspace(store, vault, settings)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -83,13 +87,16 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
         try:
             if background:
                 runner.start()
+                workspace.start()
             yield
         finally:
+            workspace.stop()
             runner.stop()
             lock.close()
 
     app = FastAPI(title="QuantPilot", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.engine, app.state.store, app.state.vault, app.state.runner = engine, store, vault, runner
+    app.state.workspace = workspace
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=[urlsplit(settings.public_origin).hostname, "127.0.0.1", "localhost"])
 
     @app.middleware("http")
@@ -101,7 +108,10 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
                 length = int(request.headers.get("content-length", "-1"))
             except ValueError:
                 length = -1
-            if not 0 <= length <= 16384 or request.headers.get("transfer-encoding"):
+            max_body = 131072 if request.url.path == "/api/v2/chatgpt/pair/complete" else 16384
+            if request.url.path == "/api/v2/logic/import":
+                max_body = 1048576
+            if not 0 <= length <= max_body or request.headers.get("transfer-encoding"):
                 return JSONResponse({"detail": "invalid_body_size"}, status_code=413)
             if request.headers.get("content-type", "").split(";")[0] != "application/json":
                 return JSONResponse({"detail": "json_required"}, status_code=415)
@@ -142,7 +152,7 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
 
     @app.get("/healthz")
     def health():
-        return {"status": "ok", "mode": "paper"}
+        return {"status": "ok", "version": "0.6.0", "mode": "paper-first"}
 
     @app.post("/api/login")
     def login(body: Login, request: Request, response: Response):
@@ -285,11 +295,18 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
         store.record("ai_settings", {"enabled": body.enabled, "model": body.model})
         return {"enabled": body.enabled, "model": body.model}
 
+    install_v2(app, workspace, session, mutation)
+    install_admin(app, store, settings, auth_settings, session, mutation)
+
     static = Path(__file__).parent / "static"
     app.mount("/static", StaticFiles(directory=static), name="static")
 
     @app.get("/")
     def index():
+        return FileResponse(static / "workspace.html")
+
+    @app.get("/legacy")
+    def legacy():
         return FileResponse(static / "index.html")
 
     return app

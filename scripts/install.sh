@@ -63,6 +63,10 @@ find "$RELEASE_DIR" -type d -name __pycache__ -prune -exec rm -rf {} +
 python3 -m venv "$RELEASE_DIR/.venv"
 "$RELEASE_DIR/.venv/bin/python" -m pip install --require-hashes -r "$RELEASE_DIR/requirements.lock"
 "$RELEASE_DIR/.venv/bin/python" -m pip install --no-deps --no-build-isolation "$RELEASE_DIR"
+chmod -R a+rX "$RELEASE_DIR"
+bash "$RELEASE_DIR/scripts/install-codex.sh"
+# Verify production RPC fields against the exact pinned binary, without user auth.
+"$RELEASE_DIR/.venv/bin/python" "$RELEASE_DIR/scripts/check-codex-service.py"
 # Validate configuration before replacing a running release.
 if ((UPGRADE)); then
   QP_CONFIG="$DATA_DIR/config.json" "$ROOT_DIR/current/.venv/bin/qp" backup
@@ -82,11 +86,11 @@ else
 fi
 chown -R quantpilot:quantpilot "$DATA_DIR"
 chmod -R go-rwx "$DATA_DIR"
-chmod -R a+rX "$RELEASE_DIR"
 PREVIOUS="$(readlink "$ROOT_DIR/current" 2>/dev/null || true)"
 ln -s "$RELEASE_DIR" "$ROOT_DIR/current.new"
 mv -Tf "$ROOT_DIR/current.new" "$ROOT_DIR/current"
 install -m 644 "$SOURCE_DIR/scripts/quantpilot.service" /etc/systemd/system/quantpilot.service
+install -m 644 "$SOURCE_DIR/scripts/quantpilot-ai.service" /etc/systemd/system/quantpilot-ai.service
 cat >/usr/local/bin/qp <<'WRAPPER'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -95,14 +99,18 @@ exec /opt/quantpilot/current/.venv/bin/qp "$@"
 WRAPPER
 chmod 755 /usr/local/bin/qp
 ln -sfn /usr/local/bin/qp /usr/local/bin/quantpilot
+install -d -m 755 -o root -g root /var/lib/quantpilot-maintenance
+install -m 644 "$SOURCE_DIR/scripts/quantpilot-update.service" /etc/systemd/system/quantpilot-update.service
+install -m 644 "$SOURCE_DIR/scripts/quantpilot-update.timer" /etc/systemd/system/quantpilot-update.timer
 systemctl daemon-reload
-systemctl enable quantpilot
-systemctl restart quantpilot
+systemctl enable quantpilot quantpilot-ai
+systemctl restart quantpilot-ai || true
+systemctl restart quantpilot || true
 # Certificate verification is not disabled. For an Origin CA certificate,
 # readiness is checked via TCP + systemd; external HTTPS is verified at Cloudflare.
 READY=0
 for attempt in {1..20}; do
-  if QP_CONFIG="$DATA_DIR/config.json" "$RELEASE_DIR/.venv/bin/python" -c 'import socket; from quantpilot.config import load_settings; s=load_settings(); socket.create_connection(("127.0.0.1",s.port),2).close()' 2>/dev/null && systemctl is-active --quiet quantpilot; then READY=1; break; fi
+  if QP_CONFIG="$DATA_DIR/config.json" "$RELEASE_DIR/.venv/bin/python" -c 'import socket; from quantpilot.config import load_settings; s=load_settings(); socket.create_connection(("127.0.0.1",s.port),2).close()' 2>/dev/null && systemctl is-active --quiet quantpilot && "$RELEASE_DIR/.venv/bin/python" -c 'from quantpilot.v2.codex_client import CodexConnection; assert CodexConnection().status()["available"]' 2>/dev/null; then READY=1; break; fi
   sleep 1
 done
 if (( ! READY )); then
@@ -110,12 +118,21 @@ if (( ! READY )); then
   if [[ -n "$PREVIOUS" ]]; then
     ln -s "$PREVIOUS" "$ROOT_DIR/current.rollback"
     mv -Tf "$ROOT_DIR/current.rollback" "$ROOT_DIR/current"
+    systemctl stop quantpilot-ai
+    if [[ -f "$PREVIOUS/scripts/quantpilot-ai.service" ]]; then
+      install -m 644 "$PREVIOUS/scripts/quantpilot-ai.service" /etc/systemd/system/quantpilot-ai.service
+      systemctl daemon-reload
+      systemctl restart quantpilot-ai
+    else
+      systemctl disable quantpilot-ai
+    fi
     systemctl restart quantpilot
     echo "Previous release restored; data preserved." >&2
   else
-    systemctl stop quantpilot
+    systemctl stop quantpilot quantpilot-ai
   fi
   exit 1
 fi
+systemctl enable --now quantpilot-update.timer
 echo "QuantPilot installed. Use: sudo qp | sudo qp status | sudo qp logs"
 echo "真实交易已锁定。使用设置的 HTTPS 域名，或 SSH 端口转发访问本机端口。"

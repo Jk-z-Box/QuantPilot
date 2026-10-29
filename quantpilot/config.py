@@ -94,7 +94,7 @@ def atomic_json(path: Path, payload: dict):
         tmp.unlink(missing_ok=True)
 
 
-def update_settings(path: Path, changes: dict, fallback: Settings | None = None):
+def update_settings(path: Path, changes: dict, fallback: Settings | None = None, expected_password_hash: str | None = None):
     """Serialize read/modify/write with CLI password rotations and Web settings."""
     fd = os.open(path.with_suffix(".lock"), os.O_RDWR | os.O_CREAT, 0o600)
     with os.fdopen(fd, "a+") as lock:
@@ -102,6 +102,8 @@ def update_settings(path: Path, changes: dict, fallback: Settings | None = None)
         saved = load_settings(path) if path.exists() else fallback
         if saved is None:
             raise ValueError("Missing config")
+        if expected_password_hash is not None and saved.password_hash != expected_password_hash:
+            raise ValueError("Authentication changed")
         updated = Settings.model_validate({**saved.model_dump(), **changes})
         atomic_json(path, updated.model_dump())
         return updated

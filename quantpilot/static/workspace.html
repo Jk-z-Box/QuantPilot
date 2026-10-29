@@ -1,0 +1,1111 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>QuantPilot · 市场与交易工作台</title>
+    <link rel="stylesheet" href="/static/workspace.css" />
+    <script src="/static/workspace.js" defer></script>
+    <script src="/static/management.js" defer></script>
+  </head>
+  <body>
+    <section id="login" class="login-wrap">
+      <div class="login-story">
+        <a class="brand"><span class="brand-mark">Q</span> QuantPilot</a>
+        <div>
+          <p class="eyebrow">YOUR MARKET, IN FOCUS</p>
+          <h1>看清机会，<br />掌握每一步。</h1>
+          <p>
+            从市场观察，到策略验证。<br />每一个信号都有依据，每一次执行都有边界。
+          </p>
+          <div class="story-tags">
+            <span>多周期趋势</span><span>独立账户</span><span>动态风控</span>
+          </div>
+        </div>
+        <small>QUANTPILOT / 02</small>
+      </div>
+      <form id="loginForm" class="login-card">
+        <p class="eyebrow">WELCOME BACK</p>
+        <h2>进入你的交易工作台</h2>
+        <p class="muted">使用安装时设置的管理员账号登录。</p>
+        <label
+          >用户名<input
+            name="username"
+            autocomplete="username"
+            required /></label
+        ><label
+          >密码<input
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            required /></label
+        ><button class="primary">登录工作台 <span>↗</span></button>
+        <p id="loginError" class="negative" role="alert"></p>
+        <p class="fine">默认使用模拟账户。交易所账户需要单独配置与授权。</p>
+      </form>
+    </section>
+    <div id="app" class="app" hidden>
+      <aside class="sidebar">
+        <a href="/" class="brand"
+          ><span class="brand-mark">Q</span> QuantPilot</a
+        >
+        <div class="workspace-label">
+          <span class="dot"></span>
+          <div>我的交易工作区<small>PERPETUAL / 多账户</small></div>
+        </div>
+        <p class="nav-caption">工作台</p>
+        <nav>
+          <button class="nav active" data-page="market">
+            <span>◫</span>市场与机会</button
+          ><button class="nav" data-page="accounts">
+            <span>▣</span>账户与仓位</button
+          ><button class="nav" data-page="history">
+            <span>≡</span>交易记录</button
+          ><button class="nav" data-page="settings">
+            <span>✧</span>数据与 AI
+          </button>
+          <button class="nav" data-page="logic"><span>◇</span>量化逻辑</button>
+          <button class="nav" data-page="admin"><span>⚙</span>设置</button>
+        </nav>
+        <div class="sidebar-bottom">
+          <div class="guide">
+            <span>◈</span><b>先理解，再执行</b>
+            <p>评分是规则评估，不是盈利概率。你始终可以暂停新的交易。</p>
+            <button id="help" class="text-button">查看使用指南 ↗</button>
+          </div>
+          <a href="/legacy" class="legacy">旧版模拟账本 ↗</a
+          ><button id="logout" class="text-button">退出登录</button
+          ><small>QUANTPILOT 0.6</small>
+        </div>
+      </aside>
+      <div class="main">
+        <header class="topbar">
+          <div class="breadcrumb">
+            工作台 <span>/</span> <b id="breadcrumb">市场与机会</b>
+          </div>
+          <div class="top-actions">
+            <span id="connection" class="connection"
+              ><i class="dot"></i> 正在连接</span
+            ><button
+              id="accountMenu"
+              class="avatar"
+              aria-label="用户菜单"
+              title="用户菜单"
+            >
+              Q
+            </button>
+          </div>
+        </header>
+        <main class="content">
+          <div id="demoBanner" class="banner warning" hidden>
+            当前为演示环境：价格和 K 线为合成数据，不能作为市场判断依据。
+          </div>
+          <div id="haltBanner" class="banner warning" hidden>
+            新开仓已暂停，账户自动交易已停用。已有模拟仓位仍检查止盈止损。
+          </div>
+          <div id="errorBanner" class="banner error" role="alert" hidden></div>
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">OBSERVE. EVALUATE. ACT.</p>
+              <h1 id="pageTitle">市场与机会</h1>
+              <p id="pageDescription" class="muted">
+                让数据说清楚，什么时候值得行动。
+              </p>
+            </div>
+            <div class="heading-actions" aria-label="交易设置">
+              <div class="heading-control">
+                <label for="profile">风险偏好</label
+                ><select id="profile" aria-label="风险偏好">
+                  <option value="conservative">保守</option>
+                  <option value="balanced">平衡</option>
+                  <option value="aggressive">激进</option>
+                </select>
+              </div>
+              <form id="scoreForm" class="heading-control">
+                <label for="minScore">有效分数 / 100</label>
+                <div class="score-setting">
+                  <input
+                    id="minScore"
+                    type="number"
+                    min="1"
+                    max="100"
+                    step="1"
+                    required
+                    value="80"
+                    aria-describedby="scoreHelp"
+                  /><button class="secondary" aria-label="应用有效分数">
+                    应用
+                  </button>
+                </div>
+              </form>
+              <div class="heading-control">
+                <span class="control-label">自动开仓</span
+                ><button id="halt" class="danger-outline">Ⅱ 暂停开仓</button>
+              </div>
+            </div>
+          </div>
+          <p id="scoreHelp" class="small muted threshold-help">
+            分数可设为
+            1–100；达到门槛仍须通过行情、时效、资金与风控检查。加仓需额外 5
+            分（最高 100）。
+          </p>
+          <section data-panel="market">
+            <div class="section-line">
+              <div>
+                <b>我的监测列表</b
+                ><span class="muted small"> USDT 永续合约</span>
+              </div>
+              <button id="editWatch" class="text-button">管理交易对 ＋</button>
+            </div>
+            <div id="watchTiles" class="watch-tiles"></div>
+            <div class="market-grid">
+              <article class="card chart-card">
+                <div class="card-head">
+                  <div>
+                    <p class="eyebrow" id="chartVenue">MARKET</p>
+                    <h2 id="chartTitle">选择交易对</h2>
+                  </div>
+                  <div class="chart-actions">
+                    <select id="timeframe" aria-label="K 线周期">
+                      <option value="5m">5 分钟</option>
+                      <option value="15m">15 分钟</option>
+                      <option value="1h" selected>1 小时</option>
+                      <option value="4h">4 小时</option>
+                      <option value="1d">日线</option>
+                      <option value="1w">周线</option></select
+                    ><button
+                      id="chartReset"
+                      class="icon-button"
+                      title="重置图表缩放"
+                      aria-label="重置缩放"
+                    >
+                      ⤢
+                    </button>
+                  </div>
+                </div>
+                <div class="chart-quote">
+                  <strong id="chartPrice">—</strong
+                  ><span id="chartMeta" class="muted small">等待报价</span>
+                </div>
+                <div id="chartContainer" class="chart-container">
+                  <svg
+                    id="candles"
+                    viewBox="0 0 960 380"
+                    role="img"
+                    aria-label="价格蜡烛图和成交量"
+                  ></svg>
+                  <div id="chartEmpty" class="chart-empty">正在读取 K 线…</div>
+                  <div id="chartTooltip" class="chart-tooltip" hidden></div>
+                </div>
+                <div class="chart-foot">
+                  <span
+                    ><i class="dot"></i>
+                    <span id="chartFresh">等待数据</span></span
+                  ><span>滚轮缩放 · 双击恢复 · 最新一根可能未收盘</span>
+                </div>
+                <div id="trendRow" class="trend-row"></div>
+              </article>
+              <article class="card opportunity-card">
+                <div class="card-head">
+                  <div>
+                    <p class="eyebrow">OPPORTUNITY</p>
+                    <h2>当前交易机会</h2>
+                  </div>
+                  <span id="signalBadge" class="badge">评估中</span>
+                </div>
+                <div class="score-line">
+                  <div><strong id="score">—</strong><span>/ 100</span></div>
+                  <span id="scoreLabel" class="muted">80 分起生效</span>
+                </div>
+                <div class="score-track">
+                  <span id="scoreBar"></span><i id="scoreThreshold"></i>
+                </div>
+                <div id="signalSummary" class="signal-summary">
+                  正在分析周线、日线、4 小时和 1 小时趋势。
+                </div>
+                <div id="tradePlan" class="trade-plan"></div>
+                <div id="signalReasons" class="signal-reasons"></div>
+                <div class="op-footer">
+                  <span id="expiry" class="small muted">等待评估</span
+                  ><button id="reviewAI" class="text-button">✧ AI 复核</button>
+                </div>
+              </article>
+            </div>
+            <div class="detail-grid">
+              <article class="card">
+                <div class="card-head">
+                  <div>
+                    <p class="eyebrow">EVIDENCE</p>
+                    <h2>这次判断的依据</h2>
+                  </div>
+                  <span id="coverage" class="badge">数据完整度 —</span>
+                </div>
+                <div id="scoreDetails" class="score-details"></div>
+              </article>
+              <article class="card">
+                <div class="card-head">
+                  <div>
+                    <p class="eyebrow">CONTEXT & RISK</p>
+                    <h2>市场背景与事件</h2>
+                  </div>
+                  <button class="text-button" data-go="settings">
+                    配置来源 ↗
+                  </button>
+                </div>
+                <div id="evidenceList" class="evidence-list"></div>
+              </article>
+            </div>
+          </section>
+          <section data-panel="accounts" hidden>
+            <div class="section-line">
+              <p class="muted">
+                模拟资金与真实账户分开管理。账户授权只对所选交易对生效。
+              </p>
+              <button id="addAccount" class="primary">＋ 添加账户</button>
+            </div>
+            <div id="accountCards" class="account-cards"></div>
+            <article class="card positions-card">
+              <div class="card-head">
+                <h2>当前仓位</h2>
+                <span class="muted small"
+                  >模拟按维持保证金率 0.5% + 平仓费 0.05% 估算；全仓估算假设其他仓位价格不变。交易所账户采用返回值。</span
+                >
+              </div>
+              <div class="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>账户 / 市场</th>
+                      <th>方向 / 数量</th>
+                      <th>开仓均价</th>
+                      <th>浮动盈亏</th>
+                      <th>止损 / 强平价</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="positions"></tbody>
+                </table>
+              </div>
+            </article>
+          </section>
+          <section data-panel="history" hidden>
+            <article class="card">
+              <div class="card-head">
+                <h2>交易与执行记录</h2>
+                <span class="muted small">最近 100 条 · 含未确认状态</span>
+              </div>
+              <div class="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>时间</th>
+                      <th>账户</th>
+                      <th>操作</th>
+                      <th>市场</th>
+                      <th>数量 / 价格</th>
+                      <th>结果</th>
+                    </tr>
+                  </thead>
+                  <tbody id="orderRows"></tbody>
+                </table>
+              </div>
+            </article>
+            <article class="card audit-card">
+              <div class="card-head">
+                <h2>操作记录</h2>
+                <button id="refreshAudit" class="text-button">刷新</button>
+              </div>
+              <div id="auditRows"></div>
+            </article>
+          </section>
+          <section data-panel="settings" hidden>
+            <div class="detail-grid">
+              <article class="card">
+                <div class="card-head">
+                  <div>
+                    <p class="eyebrow">AI COPILOT</p>
+                    <h2>OpenAI 风险复核</h2>
+                  </div>
+                  <span id="aiStatus" class="badge">未启用</span>
+                </div>
+                <div
+                  id="aiErrorBox"
+                  class="ai-error-panel"
+                  role="status"
+                  hidden
+                >
+                  <strong id="aiErrorTitle"></strong>
+                  <p id="aiErrorMessage"></p>
+                  <a
+                    id="aiErrorAction"
+                    href="https://platform.openai.com/settings/organization/billing/overview"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    hidden
+                    >检查 API 余额与账单 ↗</a
+                  >
+                  <small id="aiErrorCode"></small>
+                </div>
+                <p class="muted">
+                  AI
+                  可以修正评分、缩短有效期，并提出仓位干预。订单仍须通过账户权限和风控检查。启用后会向
+                  OpenAI 发送行情、事件摘要及匿名化账户资金与持仓数据。
+                </p>
+                <div class="ai-connection-panel">
+                  <label
+                    >AI 绑定方式<select
+                      id="aiProvider"
+                      form="aiForm"
+                      name="provider"
+                    >
+                      <option value="codex">
+                        Continue with ChatGPT · 服务器登录
+                      </option>
+                      <option value="api_key">API Key · 独立计费</option>
+                      <option value="chatgpt">
+                        旧版官方授权 · 本机登录助手
+                      </option>
+                    </select></label
+                  >
+                  <p id="aiProviderHint" class="small muted"></p>
+                  <div id="codexPanel" hidden>
+                    <div class="section-line">
+                      <strong>服务器 ChatGPT 连接</strong
+                      ><span id="codexBadge" class="badge">未连接</span>
+                    </div>
+                    <p class="small muted">
+                      无需终端或本机助手。服务器负责登录状态和后续调用，你只需在
+                      OpenAI 官方页面确认一次。
+                    </p>
+                    <div class="connection-actions">
+                      <button type="button" id="codexLogin" class="primary">
+                        Continue with ChatGPT
+                      </button>
+                      <button
+                        type="button"
+                        id="codexUse"
+                        class="secondary"
+                        hidden
+                      >
+                        使用此连接
+                      </button>
+                      <button
+                        type="button"
+                        id="codexLogout"
+                        class="danger-outline"
+                        hidden
+                      >
+                        断开连接
+                      </button>
+                    </div>
+                    <div
+                      id="codexDevice"
+                      class="device-card"
+                      hidden
+                      aria-live="polite"
+                    >
+                      <p><strong>1. 复制一次性授权码</strong></p>
+                      <div class="device-code-row">
+                        <input
+                          id="codexCode"
+                          readonly
+                          autocomplete="off"
+                          aria-label="一次性设备授权码"
+                        /><button
+                          id="codexCopy"
+                          type="button"
+                          class="secondary"
+                        >
+                          复制
+                        </button>
+                      </div>
+                      <p><strong>2. 在 OpenAI 官方页面完成授权</strong></p>
+                      <a
+                        href="https://auth.openai.com/codex/device"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="device-link"
+                        >打开官方授权页面 ↗</a
+                      >
+                      <p class="small muted">
+                        输入上方代码，并确认登录的是你自己的 ChatGPT
+                        账户。完成后返回这里，系统会自动识别。
+                      </p>
+                      <div class="connection-actions">
+                        <span id="codexProgress" role="status"
+                          >正在等待官方授权…</span
+                        ><button
+                          id="codexCancel"
+                          type="button"
+                          class="text-button"
+                        >
+                          取消本次登录
+                        </button>
+                      </div>
+                    </div>
+                    <p id="codexMessage" class="small muted" role="status"></p>
+                    <p class="fine">
+                      若官方页面要求开启设备码登录，请到 ChatGPT「设置 →
+                      安全」开启后重试。调用使用 ChatGPT/Codex
+                      额度；可用模型和额度以官方实际返回为准，不会自动切换到 API
+                      Key。授权成功后仍需选择模型、保存 AI 设置。
+                    </p>
+                  </div>
+                  <div id="chatgptPanel" hidden>
+                    <div class="section-line">
+                      <strong>ChatGPT 连接</strong
+                      ><span id="chatgptBadge" class="badge">未连接</span>
+                    </div>
+                    <label
+                      >已保存的官方账户<select id="chatgptProfile">
+                        <option value="">添加新账户</option>
+                      </select></label
+                    >
+                    <div class="connection-actions">
+                      <button type="button" id="chatgptLogin" class="primary">
+                        Continue with ChatGPT
+                      </button>
+                      <button type="button" id="chatgptUse" class="secondary">
+                        使用此账户
+                      </button>
+                      <button
+                        type="button"
+                        id="chatgptDisconnect"
+                        class="danger-outline"
+                      >
+                        断开授权
+                      </button>
+                    </div>
+                    <div class="connection-actions">
+                      <a
+                        href="https://chatgpt.com/settings/usage"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        >查看 ChatGPT 用量与授权 ↗</a
+                      >
+                      <button
+                        type="button"
+                        id="chatgptResume"
+                        class="text-button"
+                        hidden
+                      >
+                        重试授权连接
+                      </button>
+                    </div>
+                    <p class="fine">
+                      首次连接需要在浏览器所在电脑运行登录助手。登录成功后请选择模型，再启用
+                      AI。账户是否获准共享计划、可用模型及额度，以 OpenAI
+                      返回结果为准。
+                    </p>
+                  </div>
+                </div>
+                <form id="aiForm">
+                  <div class="model-toolbar">
+                    <label
+                      >模型 ID 输入方式<select name="modelMode">
+                        <option value="list">从当前连接获取模型</option>
+                        <option value="custom">自定义填写</option>
+                      </select></label
+                    ><button id="loadModels" class="secondary" type="button">
+                      获取 / 刷新模型
+                    </button>
+                  </div>
+                  <label id="modelListLabel"
+                    >可选模型<select name="modelList">
+                      <option value="">请先连接账户，再获取模型</option>
+                    </select></label
+                  >
+                  <label id="modelCustomLabel"
+                    >自定义模型 ID<input
+                      name="model"
+                      placeholder="填写当前连接可用的模型 ID"
+                      maxlength="100"
+                      pattern="[a-zA-Z0-9_.:-]*"
+                  /></label>
+                  <p id="modelMessage" class="small muted" role="status">
+                    获取不到模型列表时，可以使用自定义填写。
+                  </p>
+                  <label
+                    >自动复核间隔<select name="interval">
+                      <option value="60">每分钟</option>
+                      <option value="300">每 5 分钟</option>
+                      <option value="900">每 15 分钟</option>
+                    </select></label
+                  ><label class="check"
+                    ><input name="enabled" type="checkbox" />启用自动 AI
+                    复核（消耗所选连接的额度）</label
+                  ><label class="check"
+                    ><input
+                      name="intervene"
+                      type="checkbox"
+                    />允许受风控约束的仓位干预</label
+                  ><button class="primary">保存 AI 设置</button>
+                </form>
+                <form
+                  id="openaiKeyForm"
+                  class="key-form"
+                  data-provider="openai"
+                >
+                  <label
+                    >OpenAI API Key<input
+                      type="password"
+                      name="key"
+                      autocomplete="off"
+                      placeholder="仅在需要新增或更换时填写"
+                      required /></label
+                  ><button class="secondary">加密保存密钥</button
+                  ><button
+                    type="button"
+                    class="danger-outline"
+                    data-delete-key="openai"
+                    disabled
+                  >
+                    删除密钥</button
+                  ><span id="openaiSaved" class="small muted"></span>
+                </form>
+              </article>
+              <article class="card">
+                <div class="card-head">
+                  <div>
+                    <p class="eyebrow">DATA CONNECTIONS</p>
+                    <h2>数据来源</h2>
+                  </div>
+                  <span class="badge good">公开数据优先</span>
+                </div>
+                <form id="aiDataForm" class="ai-data-panel">
+                  <div class="section-line">
+                    <b>AI 补全缺失数据</b
+                    ><span id="aiDataBadge" class="badge">未启用</span>
+                  </div>
+                  <label class="check"
+                    ><input
+                      name="enabled"
+                      type="checkbox"
+                    />启用联网检索补全（消耗所选连接的额度）</label
+                  >
+                  <p class="small muted">
+                    使用已保存的 AI 连接与模型，联网查找缺失或过期的资料。
+                    核对原文和日期后，显示来源并计中性覆盖分。此开关独立于 AI
+                    风险复核。
+                  </p>
+                  <label
+                    >自动检索间隔<select name="interval">
+                      <option value="900">每 15 分钟</option>
+                      <option value="1800" selected>每 30 分钟</option>
+                      <option value="3600">每 1 小时</option>
+                      <option value="86400">每天</option>
+                    </select></label
+                  >
+                  <div class="ai-data-actions">
+                    <button class="secondary">保存补全设置</button
+                    ><button
+                      id="requestAIData"
+                      type="button"
+                      class="text-button"
+                    >
+                      立即补全一次
+                    </button>
+                  </div>
+                  <p id="aiDataStatus" class="small" role="status">未启用</p>
+                  <a
+                    id="aiDataBilling"
+                    class="small"
+                    href="https://platform.openai.com/settings/organization/billing/overview"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    hidden
+                    >检查 API 余额与账单 ↗</a
+                  >
+                  <p class="fine">
+                    模型需支持联网搜索。每轮最多 3 个品种，手动检索至少间隔 5
+                    分钟。API Key 方式最多 4
+                    次工具调用；官方登录方式由计划用量限制管理，不承诺固定搜索次数。
+                    查不到可靠资料时仍显示缺失；不补造实时行情、K
+                    线或清算热力图。
+                  </p>
+                </form>
+                <div class="source-row">
+                  <b>交易所公共行情</b><span class="badge good">无需密钥</span>
+                  <p>币安 / OKX / Gate 永续合约、K 线、资金费率与持仓量。</p>
+                </div>
+                <div class="source-row">
+                  <b>Deribit · 美联储</b
+                  ><span class="badge good">无需密钥</span>
+                  <p>
+                    期权持仓、交割和最大痛点估算；FOMC 日历与官方公告；Gate
+                    单市场已发生清算量。
+                  </p>
+                </div>
+                <div class="source-row">
+                  <b>BTC ETF 已披露资金流</b
+                  ><span class="badge good">免费 · 无需密钥</span>
+                  <p>
+                    <a
+                      href="https://www.tftc.io/bitcoin-etf-flows"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      >The Commoner Bitcoin ETF Tracker / TFTC ↗</a
+                    >，CC BY 4.0。按披露交易日显示，超过 4 天不计分；目前仅覆盖
+                    BTC。ETH / SOL 可保留自选来源或人工核验导入。
+                  </p>
+                </div>
+                <div class="source-row">
+                  <b>公司公告与新闻索引</b
+                  ><span class="badge good">免费 · 无需密钥</span>
+                  <p>
+                    AVGO 优先读取 Broadcom 官方 RSS；不可用时使用 Google News
+                    公开标题与来源链接。其他股票 / ETF
+                    使用公开新闻索引。不是完整财报日历，未来财报时间需核实后导入。
+                  </p>
+                </div>
+                <div class="notice-box">
+                  公开来源会受地区、更新频率与网站访问策略影响。数据过期或缺失会显示在「市场背景与事件」，不会补成虚假数据。尚无经核实的免费全市场清算热力图替代。
+                </div>
+                <details class="optional-feeds">
+                  <summary>可选增强来源 · CoinGlass / Finnhub</summary>
+                  <p class="muted small">
+                    不配置也会使用上述公开来源。保留这些接口，方便补充你的数据权限。
+                  </p>
+                  <form class="key-form" data-provider="coinglass">
+                    <b>CoinGlass</b>
+                    <p class="small muted">
+                      已披露 ETF
+                      资金流、清算量与热力图，具体权限取决于你的套餐。
+                    </p>
+                    <label
+                      >API Key<input
+                        type="password"
+                        name="key"
+                        autocomplete="off"
+                        required /></label
+                    ><button class="secondary">保存数据密钥</button
+                    ><button
+                      type="button"
+                      class="danger-outline"
+                      data-delete-key="coinglass"
+                      disabled
+                    >
+                      删除密钥</button
+                    ><span id="coinglassSaved" class="small muted"></span>
+                  </form>
+                  <form class="key-form" data-provider="finnhub">
+                    <b>Finnhub</b>
+                    <p class="small muted">
+                      公司新闻与财报日历。没有权限时显示缺失，不填入推测数据。
+                    </p>
+                    <label
+                      >API Key<input
+                        type="password"
+                        name="key"
+                        autocomplete="off"
+                        required /></label
+                    ><button class="secondary">保存数据密钥</button
+                    ><button
+                      type="button"
+                      class="danger-outline"
+                      data-delete-key="finnhub"
+                      disabled
+                    >
+                      删除密钥</button
+                    ><span id="finnhubSaved" class="small muted"></span>
+                  </form>
+                </details>
+              </article>
+            </div>
+            <article class="card">
+              <details>
+                <summary>补充已核验的披露 / 风险事件</summary>
+                <p class="muted">
+                  用于暂未接入的数据来源。保留来源链接与发布时间，显示为人工核验导入，到期自动失效。
+                </p>
+                <form id="evidenceForm" class="form-grid">
+                  <label>交易对<select name="instrument"></select></label
+                  ><label
+                    >数据类别<select name="category">
+                      <option value="etf">实际披露资金流</option>
+                      <option value="options">期权 / 交割</option>
+                      <option value="liquidation">清算数据</option>
+                      <option value="macro">宏观 / 财报 / 突发新闻</option>
+                    </select></label
+                  ><label
+                    >来源名称<input
+                      name="source"
+                      required
+                      maxlength="100" /></label
+                  ><label
+                    >原始来源 HTTPS 链接<input
+                      name="url"
+                      type="url"
+                      required /></label
+                  ><label
+                    >发布时间<input
+                      name="published"
+                      type="datetime-local"
+                      required /></label
+                  ><label
+                    >有效截止时间<input
+                      name="expires"
+                      type="datetime-local"
+                      required /></label
+                  ><label
+                    >影响判断<select name="bias">
+                      <option value="neutral">中性 / 尚无方向结论</option>
+                      <option value="bullish">偏多</option>
+                      <option value="bearish">偏空</option>
+                      <option value="risk">重大风险，阻止开仓</option>
+                    </select></label
+                  ><label
+                    >计划事件时间（可选）<input
+                      name="event"
+                      type="datetime-local" /></label
+                  ><label
+                    >已披露数值（可选）<input
+                      name="value"
+                      type="number"
+                      step="any"
+                      value="0" /></label
+                  ><label>说明<input name="note" maxlength="1000" /></label
+                  ><button class="primary">保存已核验信息</button>
+                </form>
+              </details>
+            </article>
+          </section>
+          <section data-panel="logic" hidden class="management-page">
+            <div class="logic-hero card">
+              <div>
+                <p class="eyebrow">STRATEGY STUDIO</p>
+                <h2>让每一次调整，都有据可查。</h2>
+                <p class="muted">
+                  查看规则、编辑参数、复盘结果。修改前自动存档，随时恢复。
+                </p>
+              </div>
+              <div class="version-chip">
+                <small>当前版本</small><strong id="logicVersion">载入中</strong
+                ><span id="logicCreated" class="small muted"></span>
+              </div>
+            </div>
+            <div id="logicStatus" class="notice-box" role="status">
+              正在读取策略状态…
+            </div>
+            <div class="logic-metrics" id="logicMetrics"></div>
+            <div class="management-grid">
+              <article class="card management-card">
+                <div class="card-heading">
+                  <div>
+                    <p class="eyebrow">01 / RULES</p>
+                    <h2>当前量化逻辑</h2>
+                  </div>
+                  <span class="badge">实际运行参数</span>
+                </div>
+                <details class="logic-explainer" open>
+                  <summary>信号如何产生？</summary>
+                  <ol class="logic-flow">
+                    <li>
+                      <b>确认趋势</b>
+                      <p>
+                        只使用已收盘的周线、日线、4H、1H K 线，EMA 确定方向；4H
+                        与 1H 必须一致，保守模式要求四周期一致。
+                      </p>
+                    </li>
+                    <li>
+                      <b>逐项评分</b>
+                      <p>
+                        趋势 24、EMA/RSI/MACD 动量 18、成交量 12、波动率
+                        6、资金费率 6、合约 OI 4、期权 8、ETF 6、清算
+                        8、宏观新闻 8，总分
+                        100。缺失数据不得分，也不会重新折算成满分。
+                      </p>
+                    </li>
+                    <li>
+                      <b>生成交易计划</b>
+                      <p>
+                        止损距离 = ATR × 止损倍数，至少为价格的
+                        0.3%；两档止盈按风险距离计算。预估手续费与滑点计入收益风险比。MACD
+                        固定 12/26/9，ATR 固定 14。
+                      </p>
+                    </li>
+                    <li>
+                      <b>通过独立风控</b>
+                      <p>
+                        达到市场页的有效分数后，仍须通过成交量、时效、事件风险、价差、资金、杠杆、强平距离与账户授权检查。AI
+                        无法关闭这些检查。
+                      </p>
+                    </li>
+                  </ol>
+                </details>
+                <form id="logicForm" class="management-form">
+                  <div class="form-grid" id="logicFields"></div>
+                  <label
+                    >修改说明<input
+                      name="note"
+                      maxlength="1000"
+                      placeholder="例如：提高成交量确认要求"
+                  /></label>
+                  <p class="fine">
+                    保存后重新评估信号；已有仓位保留保护，不使用新版本继续加仓。存档保留旧版本评分及截至修改时的已实现净盈亏。
+                  </p>
+                  <div class="form-actions">
+                    <button class="primary">保存并建立新版本</button
+                    ><button type="button" class="secondary" id="logicDiscard">
+                      放弃未保存修改
+                    </button>
+                  </div>
+                </form>
+              </article>
+              <article class="card management-card">
+                <div class="card-heading">
+                  <div>
+                    <p class="eyebrow">02 / REVIEW</p>
+                    <h2>AI 定期复盘</h2>
+                  </div>
+                  <button class="secondary" id="reviewLogic">立即复盘</button>
+                </div>
+                <p class="muted">
+                  使用“数据与
+                  AI”中保存的连接和模型。合格时保留逻辑并继续复盘；后续低于合格线时，恢复评估自动优化方案。
+                </p>
+                <form id="logicReviewForm" class="management-form">
+                  <label class="check-line"
+                    ><input type="checkbox" name="enabled" />启用定期复盘</label
+                  >
+                  <label class="check-line"
+                    ><input
+                      type="checkbox"
+                      name="auto_optimize"
+                    />低于合格线时允许自动优化</label
+                  >
+                  <div class="form-grid">
+                    <label
+                      >逻辑合格分数 / 100<input
+                        type="number"
+                        name="passing_score"
+                        min="1"
+                        max="100"
+                        step="1"
+                        required
+                      /><small
+                        >用于策略复盘，与市场页的开仓有效分数独立。</small
+                      ></label
+                    >
+                    <label
+                      >复盘间隔 / 小时<input
+                        type="number"
+                        name="interval_hours"
+                        min="1"
+                        max="168"
+                        step="1"
+                        required
+                    /></label>
+                    <label
+                      >最少完整交易数<input
+                        type="number"
+                        name="minimum_trades"
+                        min="20"
+                        max="1000"
+                        step="1"
+                        required
+                      /><small
+                        >至少 20 笔；不足时不评分、不自动优化。</small
+                      ></label
+                    >
+                    <label
+                      >统计窗口 / 天<input
+                        type="number"
+                        name="lookback_days"
+                        min="7"
+                        max="365"
+                        step="1"
+                        required
+                    /></label>
+                  </div>
+                  <p class="fine">
+                    每个参数单次最多改变 20%，两次自动优化至少间隔 24
+                    小时。交易所账户正在自动交易或有受管仓位时不自动改策略。这里只发送参数、匿名交易结果和汇总，不发送密钥。
+                  </p>
+                  <button class="primary">保存复盘设置</button>
+                </form>
+                <div class="notice-box">
+                  <b>统计口径</b>
+                  <p class="small">
+                    仅统计本机当前版本、当前风险偏好与有效分数下，使用真实行情的模拟完整交易。分批平仓合并为一笔；净盈亏包含开平仓手续费、滑点与模拟资金费。演示数据、未平仓、重置掉的仓位、无法归属的旧交易和未核对的交易所盈亏不参与评分。
+                  </p>
+                  <p class="small">
+                    盈利因子 = 总盈利 ÷ 总亏损；盈亏比 = 平均盈利 ÷
+                    平均亏损。没有亏损样本时显示“—”，不会记作无限盈利。
+                  </p>
+                </div>
+              </article>
+            </div>
+            <article class="card management-card">
+              <div class="card-heading">
+                <div>
+                  <p class="eyebrow">03 / JOURNAL</p>
+                  <h2>复盘与优化记录</h2>
+                </div>
+                <span class="small muted">保留最近 500 次复盘</span>
+              </div>
+              <div id="logicReviews" class="table-wrap"></div>
+            </article>
+            <article class="card management-card">
+              <div class="card-heading">
+                <div>
+                  <p class="eyebrow">04 / ARCHIVES</p>
+                  <h2>版本存档</h2>
+                </div>
+                <div class="form-actions">
+                  <button id="exportLogic" class="secondary">
+                    导出策略与存档</button
+                  ><button id="importLogic" class="secondary">导入文件</button
+                  ><input
+                    id="logicFile"
+                    type="file"
+                    accept="application/json,.json"
+                    hidden
+                  />
+                </div>
+              </div>
+              <form id="archiveForm" class="archive-controls">
+                <label
+                  >最多保留存档数<input
+                    type="number"
+                    name="max_backups"
+                    min="1"
+                    max="100"
+                    step="1"
+                    required /></label
+                ><button class="secondary">应用数量</button>
+                <p class="fine">
+                  1–100
+                  份，超出时删除最旧存档。当前版本不占名额；导出不包含账号密码、API
+                  密钥或交易凭证。
+                </p>
+              </form>
+              <div id="logicArchives" class="table-wrap"></div>
+            </article>
+          </section>
+          <section data-panel="admin" hidden class="management-page">
+            <div class="management-grid">
+              <article class="card management-card">
+                <div class="card-heading">
+                  <div>
+                    <p class="eyebrow">ACCOUNT</p>
+                    <h2>登录账号</h2>
+                  </div>
+                </div>
+                <p class="muted">修改成功后，所有已登录设备需要重新登录。</p>
+                <form id="identityForm" class="management-form">
+                  <label
+                    >用户名<input
+                      name="username"
+                      minlength="3"
+                      maxlength="64"
+                      pattern="[a-zA-Z0-9_.-]+"
+                      autocomplete="username"
+                      required
+                    /><small
+                      >3–64 位，支持英文字母、数字、下划线、点和短横线。</small
+                    ></label
+                  >
+                  <label
+                    >当前密码<input
+                      name="current_password"
+                      type="password"
+                      autocomplete="current-password"
+                      maxlength="256"
+                      required
+                  /></label>
+                  <label
+                    >新密码<input
+                      name="new_password"
+                      type="password"
+                      autocomplete="new-password"
+                      minlength="12"
+                      maxlength="256"
+                    /><small>12–256 个字符；留空则仅修改用户名。</small></label
+                  >
+                  <label
+                    >确认新密码<input
+                      name="confirm_password"
+                      type="password"
+                      autocomplete="new-password"
+                      maxlength="256"
+                  /></label>
+                  <button class="primary">保存账号并重新登录</button>
+                </form>
+              </article>
+              <article class="card management-card">
+                <div class="card-heading">
+                  <div>
+                    <p class="eyebrow">SYSTEM</p>
+                    <h2>版本与更新</h2>
+                  </div>
+                  <span id="systemVersion" class="badge">—</span>
+                </div>
+                <div id="systemInfo" class="system-info"></div>
+                <p class="fine">
+                  更新来源固定为你自己的 QuantPilot
+                  仓库开发分支。安装前自动备份，启动检查失败时回退程序版本；更新后自动交易保持暂停。
+                </p>
+                <div class="form-actions">
+                  <button class="secondary" id="checkUpdate">检查更新</button
+                  ><button class="primary" id="applyUpdate" disabled>
+                    安装更新
+                  </button>
+                </div>
+                <p id="latestUpdate" class="small muted" role="status"></p>
+                <div id="updateStatus" class="notice-box" role="status"></div>
+              </article>
+              <article class="card management-card">
+                <div class="card-heading">
+                  <div>
+                    <p class="eyebrow">PREFERENCES</p>
+                    <h2>界面与常用配置</h2>
+                  </div>
+                </div>
+                <form id="displayForm" class="management-form">
+                  <label
+                    >网页刷新间隔 / 秒<input
+                      name="refresh_seconds"
+                      type="number"
+                      min="3"
+                      max="60"
+                      step="1"
+                      required
+                    /><small
+                      >只影响页面刷新，后台行情监测与仓位保护频率不变。</small
+                    ></label
+                  ><button class="primary">保存界面设置</button>
+                </form>
+                <div class="settings-links">
+                  <button class="text-button" data-go="logic">
+                    量化参数、复盘与备份设置 ↗</button
+                  ><button class="text-button" data-go="settings">
+                    AI 连接和数据来源 ↗</button
+                  ><button class="text-button" data-go="accounts">
+                    账户、币数量与杠杆设置 ↗
+                  </button>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <footer>
+            <span>数据与机会持续刷新 · 失效信号不执行</span
+            ><span>QUANTPILOT / MISSION CONTROL</span>
+          </footer>
+        </main>
+      </div>
+    </div>
+    <dialog id="dialog">
+      <div class="dialog-head">
+        <h2 id="dialogTitle"></h2>
+        <button id="closeDialog" class="icon-button" aria-label="关闭弹窗">
+          ×
+        </button>
+      </div>
+      <div id="dialogBody"></div>
+    </dialog>
+    <div id="toast" role="status" hidden></div>
+  </body>
+</html>

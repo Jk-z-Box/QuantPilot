@@ -67,12 +67,12 @@ def cloudflare_rule(domain: str, port: int):
         "action_parameters": {"origin": {"port": port}}}
 
 
-def service(action):
+def service(action, unit="quantpilot"):
     if action not in ("start", "stop", "restart", "status", "logs"):
         raise ValueError("Unknown service action")
     if not shutil.which("systemctl"):
         raise ValueError("Service management requires Linux with systemd; use qp serve locally")
-    command = ["journalctl", "-u", "quantpilot", "-n", "100", "--no-pager"] if action == "logs" else ["systemctl", action, "quantpilot"]
+    command = ["journalctl", "-u", unit, "-n", "100", "--no-pager"] if action == "logs" else ["systemctl", action, unit]
     return subprocess.run(command, check=False).returncode  # noqa: S603
 
 
@@ -97,7 +97,7 @@ def main(argv=None):
     init.add_argument("--tls-cert")
     init.add_argument("--tls-key")
     init.add_argument("--demo", action="store_true")
-    for name in ("serve", "status", "start", "stop", "restart", "logs", "password", "doctor", "menu"):
+    for name in ("serve", "status", "start", "stop", "restart", "logs", "password", "doctor", "menu", "ai-status", "ai-restart", "ai-logs"):
         sub.add_parser(name)
     kill = sub.add_parser("kill")
     kill.add_argument("state", choices=["on", "off"])
@@ -109,9 +109,17 @@ def main(argv=None):
     cf.add_argument("--port", type=int, required=True)
     back = sub.add_parser("backup")
     back.add_argument("--output", type=Path)
+    chatgpt = sub.add_parser("chatgpt-login", help="在运行浏览器的电脑上完成 OpenAI 官方登录，再连接自托管服务器")
+    chatgpt.add_argument("--server", required=True)
+    chatgpt.add_argument("--local-data", type=Path)
+    chatgpt.add_argument("--no-browser", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     os.umask(0o077)
     try:
+        if args.command == "chatgpt-login":
+            from .chatgpt_login import login
+
+            return login(args)
         if args.command == "init":
             initialize(args)
             return 0
@@ -120,6 +128,8 @@ def main(argv=None):
             return 0
         if args.command in (None, "menu"):
             return menu()
+        if args.command in ("ai-status", "ai-restart", "ai-logs"):
+            return service(args.command.removeprefix("ai-"), "quantpilot-ai")
         if args.command in ("start", "stop", "restart", "logs"):
             return service(args.command)
         settings = load_settings()
@@ -132,13 +142,30 @@ def main(argv=None):
                         workers=1, proxy_headers=False, access_log=False, log_level="warning",
                         ssl_certfile=settings.tls_cert, ssl_keyfile=settings.tls_key)
         elif args.command == "status":
+            with store.connect() as db:
+                v2 = {r["key"]: json.loads(r["value"]) for r in db.execute("SELECT key,value FROM kv WHERE key IN ('v2_preferences','v2_accounts')")}
             print(json.dumps({"mode": "paper", "live_locked": True, "market_mode": settings.market_mode,
                 "origin": settings.public_origin, "kill_switch": store.get("kill"),
-                "strategy": store.get("strategy")}, indent=2))
+                "strategy": store.get("strategy"),
+                "workspace": v2.get("v2_preferences"),
+                "accounts": [{"id": a["id"], "name": a["name"], "kind": a["kind"], "auto": a["auto"]} for a in (v2.get("v2_accounts") or {}).values()],
+                "live_execution_switch": os.getenv("QP_LIVE_EXECUTION") == "1"}, indent=2))
             if shutil.which("systemctl"):
                 return service("status")
         elif args.command == "kill":
             store.set_kill(args.state == "on")
+            with store.transaction() as db:
+                row = db.execute("SELECT value FROM kv WHERE key='v2_preferences'").fetchone()
+                if row:
+                    prefs = json.loads(row[0])
+                    prefs["halted"] = args.state == "on"
+                    store.write(db, "v2_preferences", prefs)
+                    if args.state == "on":
+                        accounts = store.read(db, "v2_accounts")
+                        for account in accounts.values():
+                            account["auto"] = False
+                        store.write(db, "v2_accounts", accounts)
+                    store.audit(db, "v2_cli_halt", {"halted": prefs["halted"]})
             print("开仓暂停。减仓和保护退出仍可执行。" if args.state == "on" else "开仓限制已解除，策略仍需手动启用。")
         elif args.command == "password":
             password = getpass.getpass("新密码（至少 12 位）: ")
