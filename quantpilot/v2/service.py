@@ -68,6 +68,8 @@ class Workspace:
                         sizing.setdefault("quantity", None)
                         sizing.setdefault("leverage", leverage)
                     account["auto"] = False
+                for sizing in account["sizing"]:
+                    sizing.setdefault("margin_mode", "isolated")
                 if account["kind"] != "paper":
                     account["capital"] = None
             self.store.write(db, "v2_accounts", accounts)
@@ -104,7 +106,9 @@ class Workspace:
 
     def auth_changed(self):
         if hasattr(self, "logic"):
-            self.logic.settings({**self.store.get("v2_logic")["settings"], "enabled": False, "auto_optimize": False})
+            self.logic.settings(
+                {**self.store.get("v2_logic")["settings"], "enabled": False, "auto_optimize": False}
+            )
         with self.lock:
             self.ai_cache.clear()
             self.ai_error = None
@@ -174,6 +178,12 @@ class Workspace:
         return items
 
     def save_account(self, account):
+        with self.exchange.guard:
+            guard = self.exchange.locks.setdefault(account.get("id", ""), threading.RLock())
+        with guard:
+            return self._save_account(account)
+
+    def _save_account(self, account):
         account = Account.model_validate(account).model_dump()
         account["id"] = account["id"] or secrets.token_hex(8)
         for sizing in account["sizing"]:
@@ -214,6 +224,22 @@ class Workspace:
             by_id = {s["instrument_id"]: s for s in account["sizing"]}
             if any(k in by_id and by_id[k]["leverage"] != p["leverage"] for k, p in positions.items()):
                 raise ValueError("请先平仓，再更改该交易对杠杆")
+            if any(
+                k in by_id and by_id[k]["margin_mode"] != p.get("margin_mode", "isolated")
+                for k, p in positions.items()
+            ):
+                raise ValueError("请先平仓，再更改该交易对逐仓 / 全仓模式")
+            old_modes = {
+                s["instrument_id"]: s.get("margin_mode", "isolated") for s in (old or {}).get("sizing", [])
+            }
+            if any(s["margin_mode"] != old_modes.get(k, "isolated") for k, s in by_id.items()) and (
+                self.store.read(db, "v2_execution_blocks").get(account["id"])
+                or db.execute(
+                    "SELECT 1 FROM v2_orders WHERE account_id=? AND state IN ('sending','unknown')",
+                    (account["id"],),
+                ).fetchone()
+            ):
+                raise ValueError("账户存在待核对订单，不能更改保证金模式")
             if old and old["capital"] != account["capital"]:
                 raise ValueError("修改初始资金请使用重置账户")
             accounts[account["id"]] = account
@@ -409,7 +435,16 @@ class Workspace:
                 quote = self.market.quote(item)
             except Exception:
                 quote = {**quote, "timestamp": 0}
-            op = evaluate(item, frames, quote, evidence, prefs["profile"], time.time(), prefs["min_score"], logic["parameters"])
+            op = evaluate(
+                item,
+                frames,
+                quote,
+                evidence,
+                prefs["profile"],
+                time.time(),
+                prefs["min_score"],
+                logic["parameters"],
+            )
             op["logic_version"] = logic["id"]
             op["demo"] = self.market.demo
             if op.get("id"):
@@ -647,7 +682,7 @@ class Workspace:
                 for r in db.execute("SELECT * FROM v2_orders ORDER BY created DESC LIMIT 100")
             ]
         return {
-            "version": "0.5.0",
+            "version": "0.6.0",
             "now": now,
             "demo": self.market.demo,
             "watchlist": self.store.get("v2_watchlist"),

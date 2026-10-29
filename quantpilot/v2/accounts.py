@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import datetime as dt
 import hashlib
 import json
@@ -7,6 +8,7 @@ import time
 
 from ..market import decimal as D
 from .logic import check_version
+from .margin import estimates, mode
 from .models import PROFILES, policy_matches
 
 FEE = D(".0005")
@@ -32,6 +34,8 @@ def valuation(book, quotes, now):
     cash, unreal, margin, exposure = D(book["cash"]), D(0), D(0), D(0)
     valid = True
     positions = []
+    cross_unreal = D(0)
+    marks = {}
     for key, p in book["positions"].items():
         q = quotes.get(key)
         fresh = bool(q and not q.get("error") and -5 <= now - q.get("timestamp", 0) <= 15)
@@ -39,10 +43,14 @@ def valuation(book, quotes, now):
         price = D(q["bid"] if p["side"] == "long" else q["ask"]) if fresh else D(p["entry"])
         qty, entry = D(p["qty"]), D(p["entry"])
         pnl = (price - entry) * qty * (1 if p["side"] == "long" else -1)
+        marks[key] = price
+        if mode(p) == "cross":
+            cross_unreal += pnl
+        elif book.get("source") != "exchange":
+            pnl = max(pnl, -D(p["margin"]))
         unreal += pnl
         margin += D(p["margin"])
         exposure += abs(qty * price)
-        liq = D(p["liquidation"])
         positions.append(
             {
                 **p,
@@ -50,12 +58,26 @@ def valuation(book, quotes, now):
                 "unrealized": str(pnl),
                 "mark": str(price),
                 "price_verified": fresh,
-                "liquidation_distance": str(abs(price - liq) / price),
+                "margin_mode": mode(p),
             }
         )
+    liquidations = (
+        estimates(book, marks)
+        if book.get("source") != "exchange"
+        else {k: D(p["liquidation"]) for k, p in book["positions"].items()}
+    )
+    for p in positions:
+        liq = liquidations[p["instrument_id"]]
+        price = D(p["mark"])
+        p["liquidation"] = str(liq) if liq is not None else None
+        p["liquidation_status"] = "estimated" if liq is not None else "no_positive_price"
+        p["liquidation_distance"] = (
+            str((price - liq) * (1 if p["side"] == "long" else -1) / price) if liq is not None else None
+        )
+        p["liquidation_verified"] = p["price_verified"] and (valid or mode(p) == "isolated")
     return {
         "equity": str(cash + unreal),
-        "available": str(cash + unreal - margin),
+        "available": str(cash + cross_unreal - margin),
         "exposure": str(exposure),
         "margin": str(margin),
         "unrealized": str(unreal),
@@ -112,6 +134,9 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
         raise ValueError("请先为此交易对设置币数量和杠杆")
     leverage = sizing["leverage"]
     old = book["positions"].get(key)
+    margin_mode = mode(sizing)
+    if old and mode(old) != margin_mode:
+        raise ValueError("持仓期间不能更改该交易对保证金模式")
     if old and leverage != old["leverage"]:
         raise ValueError("持仓期间不能更改该交易对杠杆")
     if old and old["side"] != side:
@@ -170,27 +195,39 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
         raise ValueError("固定仓位超过可用资金或风险额度")
     if amount < 5:
         raise ValueError("可用仓位额度不足")
-    # Approximation for isolated linear contracts. Real accounts use exchange liquidation prices.
-    liquidation = (
-        price * (1 - D(1) / leverage + D(".005"))
-        if side == "long"
-        else price * (1 + D(1) / leverage - D(".005"))
+    qty = (
+        amount / price
+        if sizing["mode"] == "fixed"
+        else (amount / price).quantize(D(".00000001"), rounding="ROUND_DOWN")
     )
-    if (
-        abs(stop - liquidation) / price < D(".03")
-        or (side == "long" and stop <= liquidation)
-        or (side == "short" and stop >= liquidation)
-    ):
+    projected = copy.deepcopy(book)
+    projected.pop("source", None)
+    projected["cash"] = str(D(book["cash"]) - qty * price * FEE)
+    total = qty + existing
+    position = {
+        "side": side,
+        "qty": str(total),
+        "entry": str((price * qty + (D(old["entry"]) * existing if old else 0)) / total),
+        "margin": str(qty * price / leverage + (D(old["margin"]) if old else 0)),
+        "margin_mode": margin_mode,
+    }
+    projected["positions"][key] = position
+    marks = {
+        k: D(quotes[k]["bid"] if p["side"] == "long" else quotes[k]["ask"])
+        for k, p in projected["positions"].items()
+    }
+    liquidation = estimates(projected, marks)[key]
+    sign = 1 if side == "long" else -1
+    if liquidation is not None and (stop - liquidation) * sign / price < D(".03"):
         raise ValueError("止损距离预估强平线过近")
     return {
-        "notional": amount,
-        "qty": amount / price
-        if sizing["mode"] == "fixed"
-        else (amount / price).quantize(D(".00000001"), rounding="ROUND_DOWN"),
+        "notional": qty * price,
+        "qty": qty,
         "price": price,
         "stop": stop,
         "leverage": leverage,
-        "liquidation": max(D(0), liquidation),
+        "margin_mode": margin_mode,
+        "liquidation": str(liquidation) if liquidation is not None else None,
     }
 
 
@@ -240,7 +277,7 @@ class PaperBroker:
                 old["margin"] = str(D(old["margin"]) + qty * price / sizing["leverage"])
                 old["adds"] += 1
                 old["logic_net"] = str(D(old.get("logic_net", 0)) - fee)
-                old["liquidation"] = str(sizing["liquidation"])
+                old["liquidation"] = sizing["liquidation"]
             else:
                 book["positions"][key] = {
                     "logic_version": opportunity.get("logic_version"),
@@ -259,7 +296,8 @@ class PaperBroker:
                     "targets": opportunity["plan"]["targets"],
                     "margin": str(qty * price / sizing["leverage"]),
                     "leverage": sizing["leverage"],
-                    "liquidation": str(sizing["liquidation"]),
+                    "margin_mode": sizing["margin_mode"],
+                    "liquidation": sizing["liquidation"],
                     "adds": 0,
                     "tp_done": [],
                     "risk_reduced": False,
@@ -277,6 +315,7 @@ class PaperBroker:
                 "qty": str(qty),
                 "price": str(price),
                 "fee": str(fee),
+                "margin_mode": sizing["margin_mode"],
             }
             self.record(db, identity, aid, "add" if adding else "open", detail)
             return {"status": "filled", **detail}
@@ -297,6 +336,10 @@ class PaperBroker:
             price = D(quote["bid"] if sign == 1 else quote["ask"]) * (1 - SLIP if sign == 1 else 1 + SLIP)
             fee = qty * price * FEE
             pnl = (price - D(p["entry"])) * qty * sign
+            # Isolated paper collateral is ring-fenced, including a price gap beyond bankruptcy.
+            allocated = D(p["margin"]) * qty / D(p["qty"])
+            adjustment = max(D(0), -allocated - (pnl - fee)) if mode(p) == "isolated" else D(0)
+            pnl += adjustment
             book["cash"] = str(D(book["cash"]) + pnl - fee)
             book["realized"] = str(D(book["realized"]) + pnl - fee)
             book["fees"] = str(D(book["fees"]) + fee)
@@ -352,6 +395,8 @@ class PaperBroker:
                 "price": str(price),
                 "pnl": str(pnl - fee),
                 "reason": reason,
+                "margin_mode": mode(p),
+                "isolated_loss_cap_adjustment": str(adjustment),
             }
             self.record(db, identity, aid, "close", detail)
             return {"status": "filled", **detail}
@@ -368,7 +413,17 @@ class PaperBroker:
             if (price - D(p["stop"])) * sign <= 0:
                 self.close(aid, key, q, reason="stop_loss")
                 continue
-            if (price - D(p["liquidation"])) * sign <= price * D(".03"):
+            # Recalculate shared collateral after each fill/close/funding event.
+            current_book = self.store.get("v2_ledgers")[aid]
+            snapshot = valuation(current_book, quotes, time.time())
+            marked = next((x for x in snapshot["positions"] if x["instrument_id"] == key), None)
+            if not marked:
+                continue
+            if (
+                marked["liquidation_verified"]
+                and marked["liquidation"] is not None
+                and (price - D(marked["liquidation"])) * sign <= price * D(".03")
+            ):
                 self.close(aid, key, q, reason="liquidation_distance")
                 continue
             for i, target in enumerate(p["targets"]):
@@ -430,6 +485,9 @@ class PaperBroker:
                     current = books[aid]["positions"].get(key)
                     if current and current["funding_at"] < boundary:
                         fee = D(current["qty"]) * price * D(q["funding_rate"]) * sign
+                        if mode(current) == "isolated":
+                            fee = min(fee, D(current["margin"]))
+                            current["margin"] = str(D(current["margin"]) - fee)
                         books[aid]["cash"] = str(D(books[aid]["cash"]) - fee)
                         current["funding_at"] = boundary
                         current["logic_net"] = str(D(current.get("logic_net", 0)) - fee)

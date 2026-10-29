@@ -93,6 +93,7 @@ class Sizing(Model):
     mode: Literal["fixed", "maximum"] = "maximum"
     quantity: float | None = Field(default=None, gt=0, le=1000000000)
     leverage: int = Field(default=1, ge=1, le=1000)
+    margin_mode: Literal["isolated", "cross"] = "isolated"
     add_count: int | None = Field(default=None, ge=0, le=5)
     add_ratios: list[float] = Field(default_factory=list, max_length=5)
 

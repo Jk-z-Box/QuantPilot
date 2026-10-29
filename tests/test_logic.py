@@ -382,7 +382,7 @@ def test_update_source_validation():
         assert str(request.url).startswith(
             "https://raw.githubusercontent.com/Jk-z-Box/QuantPilot/" + "a" * 40
         )
-        return httpx.Response(200, text='[project]\nversion="0.6.0"\n')
+        return httpx.Response(200, text='[project]\nversion="0.7.0"\n')
 
     result = maintenance.latest(httpx.MockTransport(handler))
     assert result["newer"] and result["commit"] == "a" * 40

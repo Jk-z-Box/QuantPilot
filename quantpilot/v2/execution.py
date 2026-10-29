@@ -12,6 +12,7 @@ from ..market import decimal as D
 from .accounts import ledger, size_order
 from .limits import contract_limits
 from .logic import check_version
+from .margin import mode
 from .models import policy_matches
 
 
@@ -76,9 +77,11 @@ class ExchangeBroker:
                 "reduce_only",
                 "reconnect_reconcile",
                 "timeout_no_duplicate",
+                "isolated_margin",
+                "cross_margin",
             )
             ready = (
-                cert["version"] == "0.5.0"
+                cert["version"] == "0.6.0"
                 and cert["exchange"] == account["exchange"]
                 and cert["credential_fingerprint"] == fingerprint
                 and all(cert["checks"].get(k) is True for k in required)
@@ -142,6 +145,8 @@ class ExchangeBroker:
             if params.get("clientOrderId"):
                 params["clientOrderId"] = "t-" + params["clientOrderId"]
             params.pop("hedged", None)
+            params.pop("marginMode", None)
+        elif account["exchange"] == "binance":
             params.pop("marginMode", None)
         return client.create_order(symbol, kind, side, amount, price, params)
 
@@ -257,16 +262,20 @@ class ExchangeBroker:
                 # Configure only the specifically authorized symbol, never global account mode.
                 if not adding:
                     try:
-                        if account["exchange"] != "gate":
-                            client.set_margin_mode("isolated", item["symbol"])
+                        if account["exchange"] == "binance":
+                            client.set_margin_mode(sizing["margin_mode"], item["symbol"])
                     except ccxt.MarginModeAlreadySet:
                         pass
-                    client.set_leverage(sizing["leverage"], item["symbol"], {"marginMode": "isolated"})
+                    client.set_leverage(
+                        sizing["leverage"],
+                        item["symbol"],
+                        {} if account["exchange"] == "binance" else {"marginMode": sizing["margin_mode"]},
+                    )
                 side = "buy" if opportunity["direction"] == "long" else "sell"
                 params = {
                     "clientOrderId": identity,
                     "timeInForce": "IOC",
-                    "marginMode": "isolated",
+                    "marginMode": sizing["margin_mode"],
                     "hedged": False,
                 }
                 price = float(client.price_to_precision(item["symbol"], str(sizing["price"])))
@@ -302,7 +311,7 @@ class ExchangeBroker:
                             client.price_to_precision(item["symbol"], str(sizing["stop"]))
                         ),
                         "reduceOnly": True,
-                        "marginMode": "isolated",
+                        "marginMode": sizing["margin_mode"],
                         "clientOrderId": identity + "s",
                     },
                 )
@@ -328,7 +337,7 @@ class ExchangeBroker:
                         float(client.price_to_precision(item["symbol"], str(t["price"]))),
                         {
                             "reduceOnly": True,
-                            "marginMode": "isolated",
+                            "marginMode": sizing["margin_mode"],
                             "clientOrderId": identity + "t" + str(i),
                         },
                     )
@@ -337,6 +346,7 @@ class ExchangeBroker:
                     targets.append(tp["id"])
                     remaining -= qty
                 result = {
+                    "margin_mode": sizing["margin_mode"],
                     "stop_price": str(sizing["stop"]),
                     "order_id": order["id"],
                     "symbol": item["symbol"],
@@ -354,7 +364,7 @@ class ExchangeBroker:
                     not position
                     or not position.get("liquidationPrice")
                     or position.get("hedged") is not False
-                    or position.get("marginMode") != "isolated"
+                    or position.get("marginMode") != sizing["margin_mode"]
                 ):
                     raise ValueError("实际持仓模式或强平线不可验证")
                 liquidation = D(position["liquidationPrice"])
@@ -375,7 +385,9 @@ class ExchangeBroker:
                         else str(base_qty * D(order.get("average") or sizing["price"]))
                     )
                     positions[key] = {
-                        "logic_version": old.get("logic_version") if old else opportunity.get("logic_version"),
+                        "logic_version": old.get("logic_version")
+                        if old
+                        else opportunity.get("logic_version"),
                         "side": opportunity["direction"],
                         "qty": str(D(position["contracts"]) * contract_size),
                         "entry": str(position["entryPrice"]),
@@ -384,6 +396,7 @@ class ExchangeBroker:
                         "targets": opportunity["plan"]["targets"],
                         "margin": str(position.get("initialMargin") or 0),
                         "leverage": sizing["leverage"],
+                        "margin_mode": sizing["margin_mode"],
                         "liquidation": str(liquidation),
                         "adds": old["adds"] + 1 if old else 0,
                         "tp_done": old["tp_done"] if old else [],
@@ -412,7 +425,11 @@ class ExchangeBroker:
                             "sell" if opportunity["direction"] == "long" else "buy",
                             filled,
                             None,
-                            {"reduceOnly": True, "marginMode": "isolated", "clientOrderId": identity + "e"},
+                            {
+                                "reduceOnly": True,
+                                "marginMode": sizing["margin_mode"],
+                                "clientOrderId": identity + "e",
+                            },
                         )
                         if not emergency.get("id"):
                             raise ValueError("紧急退出未确认")
@@ -444,6 +461,7 @@ class ExchangeBroker:
         aid = account["id"]
         managed = self.store.get("v2_managed").get(aid, {})
         book = ledger(snapshot["equity"])
+        book["source"] = "exchange"
         unreal, margin = D(0), D(0)
         for position in snapshot["positions"]:
             key = next(
@@ -460,7 +478,7 @@ class ExchangeBroker:
             if (
                 position["side"] != original["side"]
                 or position.get("hedged") is not False
-                or position.get("marginMode") != "isolated"
+                or position.get("marginMode") != mode(original)
             ):
                 raise ValueError("账户持仓方向或保证金模式不一致")
             qty = D(position["contracts"]) * D(position["contractSize"])
@@ -545,6 +563,9 @@ class ExchangeBroker:
                             (aid, key),
                         )
                     continue
+                if current.get("marginMode") != mode(p) or current.get("hedged") is not False:
+                    self.freeze(aid, "保证金或持仓模式发生外部变化，保留原生保护并停止自动干预")
+                    continue
                 protection_missing = False
                 if time.time() - self.protection_checks.get((aid, key), 0) > 60:
                     try:
@@ -611,7 +632,7 @@ class ExchangeBroker:
                             "sell" if sign == 1 else "buy",
                             amount,
                             None,
-                            {"reduceOnly": True, "marginMode": "isolated", "clientOrderId": identity},
+                            {"reduceOnly": True, "marginMode": mode(p), "clientOrderId": identity},
                         )
                         confirmed = client.fetch_order(result["id"], p["symbol"])
                         if (
@@ -659,7 +680,7 @@ class ExchangeBroker:
                             None,
                             {
                                 "reduceOnly": True,
-                                "marginMode": "isolated",
+                                "marginMode": mode(p),
                                 "stopLossPrice": float(client.price_to_precision(p["symbol"], str(target))),
                             },
                         )
@@ -711,7 +732,7 @@ class ExchangeBroker:
                                 "sell" if sign == 1 else "buy",
                                 float(amount),
                                 float(client.price_to_precision(p["symbol"], str(target["price"]))),
-                                {"reduceOnly": True, "marginMode": "isolated"},
+                                {"reduceOnly": True, "marginMode": mode(p)},
                             )
                             if not order.get("id"):
                                 raise ValueError("止盈调整未确认")

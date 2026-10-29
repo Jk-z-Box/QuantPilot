@@ -637,7 +637,7 @@ function renderAccounts(force = false) {
       .flatMap((a) =>
         (a.summary?.positions || []).map((p) => {
           const item = state.watchlist.find((i) => i.id === p.instrument_id);
-          return `<tr><td>${esc(a.name)}<small>${esc(item?.symbol || p.symbol)}</small></td><td>${directions[p.side] || esc(p.side)}<small>${fmt(p.qty ?? (p.contracts != null && p.contractSize != null ? p.contracts * p.contractSize : null), 8)}</small></td><td>${price(p.entry ?? p.entryPrice)}</td><td class="${Number(p.unrealized ?? p.unrealizedPnl) >= 0 ? "positive" : "negative"}">${fmt(p.unrealized ?? p.unrealizedPnl)}${p.price_verified === false ? "<small>行情待验证</small>" : ""}</td><td>${price(p.stop)}<small>强平 ${price(p.liquidation ?? p.liquidationPrice)}</small></td><td>${a.kind === "paper" ? `<button class="text-button" data-close-position="${a.id}" data-position="${esc(p.instrument_id)}">减仓 / 平仓</button>` : "交易所原生保护"}</td></tr>`;
+          return `<tr><td>${esc(a.name)}<small>${esc(item?.symbol || p.symbol)}</small></td><td>${directions[p.side] || esc(p.side)} · ${(p.margin_mode || p.marginMode || "isolated") === "cross" ? "全仓" : "逐仓"} ${fmt(p.leverage, 0)}×<small>${fmt(p.qty ?? (p.contracts != null && p.contractSize != null ? p.contracts * p.contractSize : null), 8)}</small></td><td>${price(p.entry ?? p.entryPrice)}</td><td class="${Number(p.unrealized ?? p.unrealizedPnl) >= 0 ? "positive" : "negative"}">${fmt(p.unrealized ?? p.unrealizedPnl)}${p.price_verified === false ? "<small>行情待验证</small>" : ""}</td><td>${price(p.stop)}<small>${p.liquidation_verified === false ? "强平估算待行情更新" : p.liquidation_status === "no_positive_price" ? "当前估算无正价格强平线" : (a.kind === "paper" ? "预估强平 " : "强平 ") + price(p.liquidation ?? p.liquidationPrice)}</small></td><td>${a.kind === "paper" ? `<button class="text-button" data-close-position="${a.id}" data-position="${esc(p.instrument_id)}">减仓 / 平仓</button>` : "交易所原生保护"}</td></tr>`;
         }),
       )
       .join("") ||
@@ -753,7 +753,7 @@ function editAccount(a) {
       .map((x) => `<option value="${x}">${exchangeName[x]}</option>`)
       .join(
         "",
-      )}</select></label><label id="paperCapital">初始模拟资金 / USDT<input name="capital" type="number" min="100" max="100000000" step="any" value="${a?.capital || 10000}" ${a ? "disabled" : ""}></label></div><p id="accountKindHint" class="notice-box"></p><h3>逐交易对设置</h3><p class="muted small">仓位填写标的数量，例如 0.01 BTC。杠杆独立设置，风险偏好仍控制亏损及总敞口。未配置的品种不会自动开仓。</p><div id="sizingRows"></div><div class="dialog-footer"><button type="button" id="cancelAccount" class="secondary">取消</button><button class="primary">保存账户设置</button></div></form>`,
+      )}</select></label><label id="paperCapital">初始模拟资金 / USDT<input name="capital" type="number" min="100" max="100000000" step="any" value="${a?.capital || 10000}" ${a ? "disabled" : ""}></label></div><p id="accountKindHint" class="notice-box"></p><h3>逐交易对设置</h3><p class="muted small">仓位填写标的数量，例如 0.01 BTC。杠杆与逐仓 / 全仓独立设置，风险偏好仍控制亏损及总敞口。未配置的品种不会自动开仓。</p><div id="sizingRows"></div><div class="dialog-footer"><button type="button" id="cancelAccount" class="secondary">取消</button><button class="primary">保存账户设置</button></div></form>`,
   );
   const f = $("accountForm"),
     drafts = new Map();
@@ -767,6 +767,7 @@ function editAccount(a) {
         mode: r.querySelector(".size-mode").value,
         quantity: r.querySelector(".size-quantity").value,
         leverage: r.querySelector(".size-leverage").value,
+        margin_mode: r.querySelector(".size-margin-mode").value,
         count: r.querySelector(".size-adds").value,
         ratios: r.querySelector(".size-ratios").value,
         open: r.querySelector("details").open,
@@ -793,6 +794,7 @@ function editAccount(a) {
             mode: setting?.mode || "maximum",
             quantity: setting?.quantity ?? "",
             leverage: setting?.leverage || 1,
+            margin_mode: setting?.margin_mode || "isolated",
             count: setting?.add_count ?? "",
             ratios:
               setting?.add_ratios
@@ -801,7 +803,12 @@ function editAccount(a) {
             open: !!setting,
           };
           const unit = i.symbol.split("/")[0];
-          return `<div class="sizing-row" data-size-id="${i.id}"><label class="check"><input type="checkbox" class="allowed" ${d.checked ? "checked" : ""}><b>${esc(i.label)}</b><span class="muted small">${esc(i.symbol)} · ${paper ? "配置此品种" : "授权自动交易"}</span></label><details ${d.open ? "open" : ""}><summary>数量、杠杆与加仓</summary><div class="sizing-grid"><label>仓位模式<select class="size-mode"><option value="maximum" ${d.mode === "maximum" ? "selected" : ""}>最大总持仓数量</option><option value="fixed" ${d.mode === "fixed" ? "selected" : ""}>固定首次开仓数量</option></select></label><label>标的数量 / ${esc(unit)}<input class="size-quantity" type="number" min="0.00000001" max="1000000000" step="any" required value="${esc(d.quantity)}" placeholder="填写 ${esc(unit)} 数量"></label><label>此交易对杠杆 / 倍<input class="size-leverage" type="number" min="1" max="1000" step="1" required value="${esc(d.leverage)}"></label><div class="limit-control"><button type="button" class="secondary load-limits">读取交易所上限</button><small class="limit-note">尚未核验。高于 1 倍必须通过服务器校验。</small></div><label>最多加仓次数<input class="size-adds" type="number" min="0" max="5" step="1" value="${esc(d.count)}" placeholder="留空：系统评估；0：不加仓"></label><label>每次加仓比例 / %<input class="size-ratios" value="${esc(d.ratios)}" placeholder="例如 25, 20" inputmode="decimal"></label></div><p class="sizing-help">固定：每次初始开仓按填写数量，风控额度不足则不下单。最大：初始仓位由系统评估，后续加仓也不超过此总数量。<br><b>25, 20</b> 表示两次分别加「初始开仓数量」的 25% 和 20%。例如初始 0.01 BTC，对应 0.0025、0.002 BTC。不是剩余仓位的比例。次数和比例都留空时系统评估；只填次数时每次上限为初始数量的 25%；填 0 禁止加仓。</p></details></div>`;
+          const held = (a?.summary?.positions || []).find(
+            (p) => p.instrument_id === i.id || p.symbol === i.symbol,
+          );
+          if (held)
+            d.margin_mode = held.margin_mode || held.marginMode || "isolated";
+          return `<div class="sizing-row" data-size-id="${i.id}"><label class="check"><input type="checkbox" class="allowed" ${d.checked ? "checked" : ""}><b>${esc(i.label)}</b><span class="muted small">${esc(i.symbol)} · ${paper ? "配置此品种" : "授权自动交易"}</span></label><details ${d.open ? "open" : ""}><summary>数量、保证金、杠杆与加仓</summary><div class="sizing-grid"><label>仓位模式<select class="size-mode"><option value="maximum" ${d.mode === "maximum" ? "selected" : ""}>最大总持仓数量</option><option value="fixed" ${d.mode === "fixed" ? "selected" : ""}>固定首次开仓数量</option></select></label><label>标的数量 / ${esc(unit)}<input class="size-quantity" type="number" min="0.00000001" max="1000000000" step="any" required value="${esc(d.quantity)}" placeholder="填写 ${esc(unit)} 数量"></label><label>保证金模式<select class="size-margin-mode" ${held ? 'data-held="true"' : ""}><option value="isolated" ${d.margin_mode === "isolated" ? "selected" : ""}>逐仓 · 保证金独立</option><option value="cross" ${d.margin_mode === "cross" ? "selected" : ""}>全仓 · 共享账户保证金</option></select><small class="margin-mode-note">${held ? "当前有持仓，平仓后才能切换模式。" : "仅此交易对生效；已有仓位不自动转换。"}</small></label><label>此交易对杠杆 / 倍<input class="size-leverage" type="number" min="1" max="1000" step="1" required value="${esc(d.leverage)}"></label><div class="limit-control"><button type="button" class="secondary load-limits">读取交易所上限</button><small class="limit-note">尚未核验。高于 1 倍必须通过服务器校验。</small></div><label>最多加仓次数<input class="size-adds" type="number" min="0" max="5" step="1" value="${esc(d.count)}" placeholder="留空：系统评估；0：不加仓"></label><label>每次加仓比例 / %<input class="size-ratios" value="${esc(d.ratios)}" placeholder="例如 25, 20" inputmode="decimal"></label></div><p class="sizing-help"><b>逐仓</b>：只使用分配给该仓位的保证金。<b>全仓</b>：同一账户的全仓仓位共享 USDT 保证金，其他仓位盈亏会影响强平线；逐仓占用资金不参与共享。模拟采用统一费率估算，不等于所选交易所的实际强平价。<br>固定：每次初始开仓按填写数量，风控额度不足则不下单。最大：初始仓位由系统评估，后续加仓也不超过此总数量。<br><b>25, 20</b> 表示两次分别加「初始开仓数量」的 25% 和 20%。例如初始 0.01 BTC，对应 0.0025、0.002 BTC。不是剩余仓位的比例。次数和比例都留空时系统评估；只填次数时每次上限为初始数量的 25%；填 0 禁止加仓。</p></details></div>`;
         })
         .join("") ||
       '<p class="empty">此交易所尚无监测品种，请先在监测列表添加。</p>';
@@ -811,6 +818,8 @@ function editAccount(a) {
         r.querySelectorAll(
           ".sizing-grid input,.sizing-grid select,.load-limits",
         ).forEach((x) => (x.disabled = !yes));
+        if (r.querySelector(".size-margin-mode").dataset.held)
+          r.querySelector(".size-margin-mode").disabled = true;
         if (yes) r.querySelector("details").open = true;
       };
       r.querySelector(".allowed").onchange = update;
@@ -862,6 +871,7 @@ function editAccount(a) {
           mode: r.querySelector(".size-mode").value,
           quantity: Number(r.querySelector(".size-quantity").value),
           leverage: Number(r.querySelector(".size-leverage").value),
+          margin_mode: r.querySelector(".size-margin-mode").value,
           add_count: count === "" ? null : Number(count),
           add_ratios: percentages.map((x) => Number(x) / 100),
         });
