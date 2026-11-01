@@ -192,7 +192,8 @@ def apply_revision(op, revision, now, intervene):
         sign = 1 if op["direction"] == "long" else -1
         entry = op["plan"]["entry"]
         valid = (
-            len(targets) == 2
+            all(t.get("enabled", True) for t in op["plan"]["targets"])
+            and len(targets) == 2
             and abs(sum(t["ratio"] for t in targets) - 1) < 1e-9
             and all(
                 0 < (t["price"] - entry) * sign <= (old["price"] - entry) * sign

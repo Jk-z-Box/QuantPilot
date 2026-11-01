@@ -23,6 +23,6 @@
 - OKX：杠杆设置传 mgnMode，订单传对应 tdMode，不切换全局账户类型。
 - Binance USDT 永续：针对所选交易对切换 CROSSED / ISOLATED，再设置杠杆。
 - 成交后与后续风控均核对交易所实际保证金模式、单向模式和实际强平价；模式不一致、强平数据不可验证时停止新增风险。原生只减仓保护订单使用持仓原模式。交易所返回 0 / 缺失强平价目前不作为可靠风险证明，执行会被保守阻止。
-- 实盘总开关默认关闭。0.6.0 验收记录必须分别证明逐仓与全仓通过交易所联调；本地替身测试不能替代实际验收。
+- 实盘总开关默认关闭。当前版本验收记录必须分别证明逐仓与全仓通过交易所联调；本地替身测试不能替代实际验收。
 
 依据：[Gate 杠杆 API](https://www.gate.com/docs/developers/apiv4/en/#update-position-leverage)、[Gate 预估强平价](https://www.gate.com/help/futures/futures/27724/calculation-of-estimated-liquidation-price-and-bankruptcy-price-of-contracts)、[OKX API](https://www.okx.com/docs-v5/en/#rest-api-account-set-leverage)、[Binance 保证金模式](https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/Change-Margin-Type)。

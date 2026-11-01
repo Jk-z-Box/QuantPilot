@@ -2027,3 +2027,168 @@ dialog[open] {
   flex-direction: row;
   justify-content: flex-start;
 }
+
+/* Responsive plotting uses the actual container dimensions, not a scaled desktop SVG. */
+.parameter-group {
+  grid-column: 1/-1;
+  border: 1px solid var(--line, #dce6e0);
+  border-radius: 12px;
+  padding: 16px;
+}
+.parameter-group summary {
+  cursor: pointer;
+  font-weight: 650;
+  margin-bottom: 16px;
+}
+.parameter-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+.override-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #678174;
+}
+.override-row input {
+  width: auto;
+  margin: 0;
+}
+.notification-grid {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 90px 90px;
+  gap: 12px;
+  align-items: center;
+}
+.notification-grid input {
+  width: 18px;
+  height: 18px;
+}
+.notification-card {
+  margin-bottom: 24px;
+}
+.chart-container svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: pan-y;
+}
+.chart-tooltip {
+  max-width: calc(100% - 16px);
+  white-space: normal;
+  pointer-events: none;
+}
+@media (max-width: 700px) {
+  .main,
+  main,
+  .market-grid,
+  .card,
+  .chart-card {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .chart-container {
+    height: 290px !important;
+    margin: 12px 12px 0 !important;
+  }
+  .chart-quote {
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: baseline;
+  }
+  .chart-quote strong {
+    font-size: 30px;
+  }
+  #chartMeta {
+    flex-basis: 100%;
+    font-size: 11px;
+    overflow-wrap: anywhere;
+  }
+  .chart-foot {
+    flex-wrap: wrap;
+    font-size: 10px;
+    gap: 5px;
+    padding: 12px 16px;
+  }
+  .chart-foot > span:last-child {
+    display: none;
+  }
+  .trend-row {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    overflow: visible;
+  }
+  .trend-row > * {
+    min-width: 0;
+    padding: 12px;
+    border-bottom: 1px solid #e5ede8;
+  }
+  .trend-row small {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  #watchTiles {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    overflow: visible;
+  }
+  #watchTiles > * {
+    width: auto;
+    min-width: 0;
+    padding: 14px;
+  }
+  #watchTiles strong {
+    font-size: 23px;
+  }
+  .parameter-grid {
+    grid-template-columns: 1fr;
+  }
+  .parameter-group {
+    padding: 12px;
+  }
+  .notification-grid {
+    grid-template-columns: minmax(110px, 1fr) 60px 60px;
+    font-size: 12px;
+  }
+}
+
+.history-settings {
+  grid-column: 1/-1;
+  padding: 12px;
+  background: #f5f9f6;
+  border-radius: 8px;
+}
+.history-settings small,
+.history-note {
+  display: block;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+#actionReviewStatus:empty {
+  display: none;
+}
+
+.parameter-field > label:first-child {
+  margin-bottom: 7px;
+  display: block;
+}
+.parameter-field .override-row {
+  margin-top: 7px;
+}
+@media (max-width: 640px) {
+  .sidebar .nav {
+    font-size: 10px;
+    min-height: 52px;
+  }
+  .sidebar {
+    padding-bottom: env(safe-area-inset-bottom);
+    height: calc(66px + env(safe-area-inset-bottom));
+  }
+  main {
+    padding-bottom: calc(100px + env(safe-area-inset-bottom));
+  }
+}

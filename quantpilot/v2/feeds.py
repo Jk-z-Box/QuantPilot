@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from .public_feeds import ETF_URL, btc_etf, company_news
+from .public_feeds import ETF_URL, FARSIDE, btc_etf, company_news, farside_etf
 
 FED = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
 
@@ -85,6 +85,7 @@ class Feeds:
     def __init__(self, vault, store, transport=None):
         self.vault, self.store, self.transport = vault, store, transport
         self.cache, self.lock = {}, threading.RLock()
+        self.diagnostics = {}
 
     def get(self, url, params=None, headers=None, text=False):
         with httpx.Client(timeout=8, transport=self.transport, follow_redirects=False) as client:
@@ -103,6 +104,13 @@ class Feeds:
                 value = fn()
             except Exception:
                 value = None
+            self.diagnostics[str(key)] = {
+                "source": str(key),
+                "checked_at": now,
+                "next_attempt": now + ttl,
+                "status": "available" if value else "unavailable",
+                "reason": "已读取来源" if value else "来源访问失败、未配置、格式变化或数据不足；不使用推测值",
+            }
             self.cache[key] = (now, value)
             return value
 
@@ -197,10 +205,10 @@ class Feeds:
                         "source": row["source"] + "（人工核验导入）",
                     }
                 )
-        liquidation = self.liquidation(asset) or self.public_liquidation(asset)
-        if liquidation:
-            out.append(liquidation)
-        if item["group"] == "equity":
+        for liquidation in (self.liquidation(asset), self.public_liquidation(asset)):
+            if liquidation:
+                out.append(liquidation)
+        if item["group"] == "equity" or asset in ("AVGO", "SOXL"):
             company = self.cached(
                 ("public_company", asset), 600, lambda: company_news(self.get, asset, time.time())
             )
@@ -216,7 +224,17 @@ class Feeds:
         )
         if public_etf:
             out.append(public_etf)
-        cg = self.coinglass(asset) if not public_etf or public_etf["status"] != "fresh" else None
+        if asset in FARSIDE:
+            public_flow = self.cached(
+                ("farside", asset),
+                1800,
+                lambda: farside_etf(
+                    self.get("https://farside.co.uk/" + FARSIDE[asset] + "/", text=True), asset, time.time()
+                ),
+            )
+            if public_flow:
+                out.append(public_flow)
+        cg = self.coinglass(asset)
         if cg:
             out.extend(cg)
         for category in ("etf", "options", "liquidation", "macro"):
@@ -340,10 +358,20 @@ class Feeds:
                 "note": f"Gate {asset}/USDT 最近 {len(rows)} 根小时统计；仅为该交易所已发生清算，不代表币安或全市场。热力图需另外配置。",
                 "details": {
                     "long_liquidation_usd": sum(
-                        float(r.get("long_liq_usd_new", r["long_liq_usd"])) for r in rows
+                        float(
+                            r["long_liq_usd_new"]
+                            if r.get("long_liq_usd_new") is not None
+                            else r["long_liq_usd"]
+                        )
+                        for r in rows
                     ),
                     "short_liquidation_usd": sum(
-                        float(r.get("short_liq_usd_new", r["short_liq_usd"])) for r in rows
+                        float(
+                            r["short_liq_usd_new"]
+                            if r.get("short_liq_usd_new") is not None
+                            else r["short_liq_usd"]
+                        )
+                        for r in rows
                     ),
                     "heatmap": None,
                 },

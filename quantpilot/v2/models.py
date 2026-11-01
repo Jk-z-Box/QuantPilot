@@ -49,6 +49,8 @@ class Instrument(Model):
     symbol: str = Field(pattern=r"^[A-Z0-9]{1,20}/USDT:USDT$")
     enabled: bool = True
     group: Literal["crypto", "equity"] = "crypto"
+    history_enabled: bool = False
+    history_interval: int = Field(default=3600, ge=300, le=86400, strict=True)
 
 
 def defaults():
@@ -71,16 +73,26 @@ class Preferences(Model):
     ai_model: str = Field(default="", max_length=100, pattern=r"^[a-zA-Z0-9_.:-]*$")
     ai_interval: int = Field(default=300, ge=60, le=3600)
     ai_intervene: bool = False
+    ai_action_enabled: bool = False
     ai_data_enabled: bool = False
     ai_data_interval: int = Field(default=1800, ge=900, le=86400)
     halted: bool = False
 
 
-POLICY_KEYS = ("ai_provider", "profile", "min_score", "ai_enabled", "ai_model", "ai_intervene", "ai_data_enabled")
+POLICY_KEYS = (
+    "ai_provider",
+    "profile",
+    "min_score",
+    "ai_enabled",
+    "ai_model",
+    "ai_intervene",
+    "ai_data_enabled",
+    "ai_action_enabled",
+)
 
 
 def signal_policy(preferences):
-    return {key: preferences[key] for key in POLICY_KEYS}
+    return {key: preferences.get(key, False) for key in POLICY_KEYS}
 
 
 def policy_matches(opportunity, preferences):

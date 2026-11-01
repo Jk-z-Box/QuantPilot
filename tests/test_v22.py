@@ -298,7 +298,7 @@ def test_only_missing_sources_supplemented_and_stale_cache_never_fresh(workspace
         workspace.store.write(db, "v2_ai_evidence", [row])
     item = universe(workspace)["btc"]
     native = {**row, "origin": "provider", "source": "actual provider"}
-    assert workspace.research.supplement(item, [native]) == [native]
+    assert workspace.research.supplement(item, [native]) == [native, row]
     missing = {"category": "etf", "status": "missing"}
     assert workspace.research.supplement(item, [missing]) == [row]
     with workspace.store.transaction() as db:

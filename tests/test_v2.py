@@ -789,7 +789,7 @@ def test_api_configuration_validation_and_persistence(logged, workspace):
     assert logged.get("/api/v2/chart/absent").status_code == 404
     workspace.market.demo = True
     assert len(logged.get("/api/v2/chart/btc?frame=4h").json()["candles"]) > 50
-    assert logged.get("/api/v2/chart/btc?frame=bad").status_code == 503
+    assert logged.get("/api/v2/chart/btc?frame=bad").status_code == 422
     assert logged.get("/api/v2/markets?exchange=unsupported").status_code == 422
     assert (
         logged.put("/api/v2/preferences", json=Preferences(profile="aggressive").model_dump()).status_code
@@ -873,7 +873,7 @@ def test_live_receipt_is_bound_expiring_private_and_blockable(workspace, monkeyp
     workspace.vault.put("v2:account:" + a["id"], secret)
     monkeypatch.setenv("QP_LIVE_EXECUTION", "1")
     cert = {
-        "version": "0.6.0",
+        "version": "0.7.0",
         "exchange": "binance",
         "credential_fingerprint": hashlib.sha256(json.dumps(secret, sort_keys=True).encode()).hexdigest(),
         "verified_at": time.time(),

@@ -291,7 +291,7 @@ def research(preferences, vault, requests, transport=None, source_transport=None
             "联网补全失败：请检查所选模型是否支持 web_search、API 权限或额度；缺失数据保持缺失"
         ) from None
     by_id = {r["id"]: r for r in requests[:3]}
-    observations, seen, rejected = [], set(), 0
+    observations, seen, rejected, diagnostics = [], set(), 0, []
     for row in rows:
         pair = (row["instrument_id"], row["category"])
         try:
@@ -300,9 +300,37 @@ def research(preferences, vault, requests, transport=None, source_transport=None
                 raise ValueError("unrequested")
             seen.add(pair)
             observations.append(verify_observation(row, item, sources, time.time(), source_transport))
+            diagnostics.append(
+                {
+                    "instrument_id": pair[0],
+                    "category": pair[1],
+                    "status": "verified",
+                    "reason": "原文引用、标的及邻近时间已核验",
+                    "url": row["url"],
+                }
+            )
         except Exception:
             rejected += 1
-    return {"observations": observations, "rejected": rejected}
+            diagnostics.append(
+                {
+                    "instrument_id": pair[0],
+                    "category": pair[1],
+                    "status": "rejected",
+                    "reason": "来源访问、原文引用、观测时间或标的核验未通过；未采用此数据",
+                }
+            )
+    for item in requests[:3]:
+        for category in item["categories"]:
+            if not any(d["instrument_id"] == item["id"] and d["category"] == category for d in diagnostics):
+                diagnostics.append(
+                    {
+                        "instrument_id": item["id"],
+                        "category": category,
+                        "status": "not_found",
+                        "reason": "联网检索未返回符合时效及原文核验要求的数据；网页摘要不等于实际披露",
+                    }
+                )
+    return {"observations": observations, "rejected": rejected, "diagnostics": diagnostics}
 
 
 class ResearchEngine:
@@ -345,20 +373,11 @@ class ResearchEngine:
         ]
 
     def supplement(self, item, evidence):
-        fresh = {
-            e["category"]
-            for e in evidence
-            if e.get("status") == "fresh"
-            and e.get("published_at", 0) <= time.time()
-            and e.get("expires_at", 0) > time.time()
-            and e.get("origin") != "ai_web_search"
-        }
         extra = [
             e
             for e in self.observations()
             if (e["instrument_id"], e["exchange"], e["symbol"])
             == (item["id"], item["exchange"], item["symbol"])
-            and e["category"] not in fresh
         ]
         filled = {e["category"] for e in extra if e["status"] == "fresh"}
         return [e for e in evidence if not (e["category"] in filled and e.get("status") == "missing")] + extra
@@ -463,6 +482,7 @@ class ResearchEngine:
                             "message": message,
                             "accepted": len(rows),
                             "rejected": result["rejected"],
+                            "diagnostics": result.get("diagnostics", []),
                             "completed_at": time.time(),
                             "error": None,
                         }

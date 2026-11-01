@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="/static/workspace.css" />
     <script src="/static/workspace.js" defer></script>
     <script src="/static/management.js" defer></script>
+    <script src="/static/notifications.js" defer></script>
   </head>
   <body>
     <section id="login" class="login-wrap">
@@ -269,7 +270,8 @@
               <div class="card-head">
                 <h2>当前仓位</h2>
                 <span class="muted small"
-                  >模拟按维持保证金率 0.5% + 平仓费 0.05% 估算；全仓估算假设其他仓位价格不变。交易所账户采用返回值。</span
+                  >模拟按维持保证金率 0.5% + 平仓费 0.05%
+                  估算；全仓估算假设其他仓位价格不变。交易所账户采用返回值。</span
                 >
               </div>
               <div class="table-scroll">
@@ -540,7 +542,17 @@
                       name="intervene"
                       type="checkbox"
                     />允许受风控约束的仓位干预</label
-                  ><button class="primary">保存 AI 设置</button>
+                  ><label class="check"
+                    ><input type="checkbox" name="actionReview" />每次交易前 AI
+                    审核（独立开关）</label
+                  >
+                  <p class="fine">
+                    开仓、加仓和主动减仓须先获 AI
+                    认可；可调整入场、止损和止盈点位。AI
+                    超时或断网时暂停新增风险，既有止盈止损继续保护。交易所原生保护单在提交前审核，触发时由交易所执行，不等待网络返回。资金、授权、真实行情和强平保护保持生效。
+                  </p>
+                  <div id="actionReviewStatus" class="fine"></div>
+                  <button class="primary">保存 AI 设置</button>
                 </form>
                 <form
                   id="openaiKeyForm"
@@ -608,6 +620,10 @@
                     </button>
                   </div>
                   <p id="aiDataStatus" class="small" role="status">未启用</p>
+                  <details>
+                    <summary>逐项检索与来源诊断</summary>
+                    <div id="dataDiagnostics"></div>
+                  </details>
                   <a
                     id="aiDataBilling"
                     class="small"
@@ -638,7 +654,7 @@
                   </p>
                 </div>
                 <div class="source-row">
-                  <b>BTC ETF 已披露资金流</b
+                  <b>ETF 已披露资金流</b
                   ><span class="badge good">免费 · 无需密钥</span>
                   <p>
                     <a
@@ -646,8 +662,8 @@
                       target="_blank"
                       rel="noopener noreferrer"
                       >The Commoner Bitcoin ETF Tracker / TFTC ↗</a
-                    >，CC BY 4.0。按披露交易日显示，超过 4 天不计分；目前仅覆盖
-                    BTC。ETH / SOL 可保留自选来源或人工核验导入。
+                    >（BTC，CC BY 4.0），并尝试 Farside 的 BTC / ETH / SOL
+                    披露表。按实际披露日期和完整性核验；部分基金尚未披露或站点限制访问时显示原因，不推算缺失资金流。
                   </p>
                 </div>
                 <div class="source-row">
@@ -813,8 +829,8 @@
                       <p>
                         趋势 24、EMA/RSI/MACD 动量 18、成交量 12、波动率
                         6、资金费率 6、合约 OI 4、期权 8、ETF 6、清算
-                        8、宏观新闻 8，总分
-                        100。缺失数据不得分，也不会重新折算成满分。
+                        8、宏观新闻 8，总分 100。启用项的权重归一化至
+                        100；缺失数据不重新分配分数。
                       </p>
                     </li>
                     <li>
@@ -822,14 +838,15 @@
                       <p>
                         止损距离 = ATR × 止损倍数，至少为价格的
                         0.3%；两档止盈按风险距离计算。预估手续费与滑点计入收益风险比。MACD
-                        固定 12/26/9，ATR 固定 14。
+                        默认 12/26/9，ATR 默认
+                        14；各周期、权重、指标和动作均可在下方调整。
                       </p>
                     </li>
                     <li>
                       <b>通过独立风控</b>
                       <p>
-                        达到市场页的有效分数后，仍须通过成交量、时效、事件风险、价差、资金、杠杆、强平距离与账户授权检查。AI
-                        无法关闭这些检查。
+                        达到有效分数后，仍须通过启用的策略条件及账户检查。AI
+                        可调整策略条件；真实行情时效、价差、资金、杠杆、强平距离与账户授权属于独立保护。
                       </p>
                     </li>
                   </ol>
@@ -920,8 +937,8 @@
                     /></label>
                   </div>
                   <p class="fine">
-                    每个参数单次最多改变 20%，两次自动优化至少间隔 24
-                    小时。交易所账户正在自动交易或有受管仓位时不自动改策略。这里只发送参数、匿名交易结果和汇总，不发送密钥。
+                    AI 可调整所有策略参数及开关，两次自动优化至少间隔 24
+                    小时。交易所账户正在自动交易或有受管仓位时不自动改策略。复盘发送参数、匿名交易结果、汇总及市场背景，不发送密钥。
                   </p>
                   <button class="primary">保存复盘设置</button>
                 </form>
@@ -985,6 +1002,71 @@
             </article>
           </section>
           <section data-panel="admin" hidden class="management-page">
+            <article class="card management-card notification-card">
+              <p class="eyebrow">NOTIFICATIONS</p>
+              <h2>交易与机会提醒</h2>
+              <p class="muted">
+                成交提醒仅在确认成交后发送；机会与 AI
+                建议不代表订单已执行。Telegram
+                在服务器运行，网页声音需要页面保持打开。
+              </p>
+              <form id="notificationForm" class="management-form">
+                <label class="check"
+                  ><input type="checkbox" name="telegram_enabled" />启用
+                  Telegram 提醒</label
+                ><label class="check"
+                  ><input
+                    type="checkbox"
+                    name="sound_enabled"
+                  />启用网页提示音</label
+                >
+                <div id="notificationChannels" class="notification-grid"></div>
+                <div class="form-actions">
+                  <button class="primary">保存提醒设置</button
+                  ><button type="button" id="soundTest" class="secondary">
+                    启用 / 测试声音
+                  </button>
+                </div>
+                <small id="soundState"></small>
+              </form>
+              <details>
+                <summary>Telegram Bot 连接</summary>
+                <p class="fine">
+                  在 Telegram 的 @BotFather 创建 Bot，把 Token 填在此处。先向
+                  Bot 发送 /start，再填写你自己的 Chat ID；群组需把 Bot
+                  加入群组并允许发消息。密钥加密保存，页面不回显。
+                </p>
+                <form id="telegramForm" class="management-form">
+                  <label
+                    >Bot Token<input
+                      type="password"
+                      name="token"
+                      autocomplete="off"
+                      required
+                      maxlength="256" /></label
+                  ><label
+                    >Chat ID<input
+                      name="chat_id"
+                      pattern="-?[0-9]{1,20}"
+                      required
+                      placeholder="数字 ID，群组通常为负数"
+                  /></label>
+                  <div class="form-actions">
+                    <button class="primary">加密保存</button
+                    ><button type="button" id="telegramTest" class="secondary">
+                      发送测试提醒</button
+                    ><button
+                      type="button"
+                      id="telegramDelete"
+                      class="secondary negative"
+                    >
+                      删除连接
+                    </button>
+                  </div>
+                </form>
+                <p id="telegramState" class="fine"></p>
+              </details>
+            </article>
             <div class="management-grid">
               <article class="card management-card">
                 <div class="card-heading">

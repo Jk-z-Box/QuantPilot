@@ -163,7 +163,7 @@ def test_unconnected_or_dead_broker_fails_closed(broker):
         broker.status()
 
 
-@pytest.mark.parametrize("format_name", ["opportunity_review", "strategy_review"])
+@pytest.mark.parametrize("format_name", ["opportunity_review", "strategy_review", "action_approval"])
 def test_model_catalog_and_sandbox(broker, format_name):
     connect(broker)
     assert broker.dispatch("models", {})["models"] == ["test-model"]

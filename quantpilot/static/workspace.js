@@ -254,6 +254,7 @@ function render() {
     `calc(${state.preferences.min_score}% - 1px)`;
   $("scoreThreshold").title = `有效门槛 ${state.preferences.min_score} 分`;
   renderAIDataStatus();
+  if (typeof renderNotifications === "function") renderNotifications();
   $("halt").textContent = state.preferences.halted
     ? "▷ 解除全局暂停"
     : "Ⅱ 暂停开仓";
@@ -332,7 +333,7 @@ function renderOpportunity() {
     : "等待多周期数据；新上市合约可能缺少足够周线。";
   const p = o?.plan;
   $("tradePlan").innerHTML = p
-    ? `<div class="plan-row"><span>开仓区间</span><strong>${price(p.entry_low)} — ${price(p.entry_high)}</strong></div><div class="plan-row stop"><span>保护止损</span><strong>${price(p.stop)}</strong></div>${p.targets.map((t, n) => `<div class="plan-row target"><span>止盈 ${n + 1} · 平仓 ${fmt(t.ratio * 100, 0)}%</span><strong>${price(t.price)}</strong></div>`).join("")}<div class="plan-row"><span>收益 / 风险 · 含预估费用</span><strong>${fmt(p.rr)} : 1</strong></div><div class="plan-row"><span>加仓观察 / 减仓观察</span><strong>${price(p.add_at)} / ${price(p.reduce_at)}</strong></div>`
+    ? `<div class="plan-row"><span>开仓区间</span><strong>${price(p.entry_low)} — ${price(p.entry_high)}</strong></div><div class="plan-row stop"><span>保护止损</span><strong>${price(p.stop)}</strong></div>${p.targets.map((t, n) => `<div class="plan-row target"><span>止盈 ${n + 1} · ${t.enabled === false ? "已关闭" : "平仓 " + fmt(t.ratio * 100, 0) + "%"}</span><strong>${price(t.price)}</strong></div>`).join("")}<div class="plan-row"><span>收益 / 风险 · 含预估费用</span><strong>${fmt(p.rr)} : 1</strong></div><div class="plan-row"><span>加仓观察 / 减仓观察</span><strong>${price(p.add_at)} / ${price(p.reduce_at)}</strong></div>`
     : '<div class="empty">行情准备好后显示交易计划</div>';
   $("signalReasons").innerHTML = (
     o ? [...o.blockers, ...o.reasons] : [q?.error || "正在收集四个周期的行情"]
@@ -360,8 +361,9 @@ function renderOpportunity() {
     });
   $("trendRow").innerHTML = ["1w", "1d", "4h", "1h"]
     .map((f, n) => {
-      const s = o?.indicators?.[f];
-      return `<div class="trend-cell">${["周线", "日线", "4 小时", "1 小时"][n]}<strong class="${s?.trend === "long" ? "positive" : s?.trend === "short" ? "negative" : ""}">${s ? directions[s.trend] : "数据不足"}</strong><small>RSI ${s ? fmt(s.rsi, 1) : "—"} · MACD ${s ? fmt(s.macd_hist, 2) : "—"}</small></div>`;
+      const s = o?.indicators?.[f],
+        h = o?.history?.[f];
+      return `<div class="trend-cell">${["周线", "日线", "4 小时", "1 小时"][n]}<strong class="${s?.trend === "long" ? "positive" : s?.trend === "short" ? "negative" : ""}">${s ? directions[s.trend] : "数据不足"}</strong><small>RSI ${o?.parameters?.rsi_enabled === false ? "已关闭" : s ? fmt(s.rsi, 1) : "—"} · MACD ${o?.parameters?.macd_enabled === false ? "已关闭" : s ? fmt(s.macd_hist, 2) : "—"}</small>${h ? `<small class="history-note">${esc(h.source || h.note)}${h.last_bar_at ? " · 最后完成 " + time(h.last_bar_at) : ""}</small>` : ""}</div>`;
     })
     .join("");
   const names = {
@@ -369,6 +371,7 @@ function renderOpportunity() {
     options: "期权 / 交割 / 最大痛点",
     liquidation: "清算量与热力图",
     macro: "宏观 / 财报 / 突发新闻",
+    derivatives: "跨交易所合约背景",
   };
   const expanded = new Set(
     [...$("evidenceList").querySelectorAll("details[open]")].map(
@@ -388,11 +391,7 @@ function renderOpportunity() {
       e.instrument_id === selected &&
       e.exchange === item?.exchange &&
       e.symbol === item?.symbol &&
-      !evidenceRows.some(
-        (x) =>
-          x.category === e.category &&
-          (x.status === "fresh" || x.url === e.url),
-      ),
+      !evidenceRows.some((x) => x.category === e.category && x.url === e.url),
   );
   const filled = new Set(
     extra.filter((e) => e.status === "fresh").map((e) => e.category),
@@ -403,9 +402,9 @@ function renderOpportunity() {
   $("evidenceList").innerHTML = evidenceRows
     .map(
       (e) =>
-        `<div class="evidence-row"><div><b>${names[e.category]}</b><span class="badge ${e.status === "fresh" ? "good" : e.status === "stale" ? "bad" : ""}">${{ fresh: "数据有效", stale: "已过期", missing: "暂缺数据" }[e.status] || "未验证"}</span></div><p>${esc(e.note || "")} ${e.value !== undefined ? "· " + fmt(e.value, 0) : ""}</p>${e.source ? `<p>${esc(e.source)} ${e.published_at ? "· " + time(e.published_at) : ""}</p>` : ""}${
+        `<div class="evidence-row"><div><b>${names[e.category] || esc(e.category)}</b><span class="badge ${e.status === "fresh" ? "good" : e.status === "stale" ? "bad" : ""}">${{ fresh: "数据有效", stale: "已过期", missing: "暂缺数据" }[e.status] || "未验证"}</span></div><p>${esc(e.note || "")} ${e.value !== undefined ? "· " + fmt(e.value, 0) : ""}</p>${e.source ? `<p>${esc(e.source)} ${e.published_at ? "· " + time(e.published_at) : ""}</p>` : ""}${
           e.details
-            ? `<details data-evidence="${esc(e.category + "|" + e.source)}" ${expanded.has(e.category + "|" + e.source) ? "open" : ""}><summary>查看数据与事件</summary>${e.details.scope ? `<p>${esc(e.details.scope)}</p>` : ""}${e.details.max_pain ? `<p>最近到期 ${time(e.details.expiry)}<br>最大痛点估算 ${price(e.details.max_pain)}<br>看涨 OI ${fmt(e.details.call_oi, 0)} / 看跌 OI ${fmt(e.details.put_oi, 0)}</p>` : ""}${(e.details.events || []).map((x) => `<p>${esc(x.title)} · ${time(x.event_at)}</p>`).join("")}${(
+            ? `<details data-evidence="${esc(e.category + "|" + e.source)}" ${expanded.has(e.category + "|" + e.source) ? "open" : ""}><summary>查看数据与事件</summary>${e.details.funding_rate !== undefined ? `<p>资金费率 ${e.details.funding_rate == null ? "缺失" : fmt(e.details.funding_rate * 100, 4) + "%"} · OI ${fmt(e.details.open_interest, 2)}</p>` : ""}${e.details.scope ? `<p>${esc(e.details.scope)}</p>` : ""}${e.details.max_pain ? `<p>最近到期 ${time(e.details.expiry)}<br>最大痛点估算 ${price(e.details.max_pain)}<br>看涨 OI ${fmt(e.details.call_oi, 0)} / 看跌 OI ${fmt(e.details.put_oi, 0)}</p>` : ""}${(e.details.events || []).map((x) => `<p>${esc(x.title)} · ${time(x.event_at)}</p>`).join("")}${(
                 e.details.news || []
               )
                 .slice(0, 4)
@@ -468,7 +467,11 @@ async function loadChart() {
     chartFrame = frame;
     $("chartEmpty").hidden = true;
     $("chartFresh").textContent =
-      (data.demo ? "演示 K 线" : "交易所 K 线") +
+      (data.reference
+        ? "参考 K 线 · " + data.reference.source + "（非当前合约历史）"
+        : data.demo
+          ? "演示 K 线"
+          : "交易所 K 线") +
       " · " +
       new Date(data.fetched_at * 1000).toLocaleTimeString("zh-CN");
     drawChart();
@@ -507,47 +510,56 @@ $("candles").addEventListener(
   },
   { passive: false },
 );
+let chartGeometry = { width: 1, plot: 1, data: [] };
 function drawChart() {
-  const svg = $("candles");
+  const svg = $("candles"),
+    container = $("chartContainer");
+  const width = Math.max(240, container.clientWidth),
+    height = Math.max(240, container.clientHeight);
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   if (!rows.length) {
     svg.innerHTML = "";
     $("chartEmpty").hidden = false;
     return;
   }
   $("chartEmpty").hidden = true;
-  const data = rows.slice(-chartCount),
+  const plot = width - (width < 500 ? 64 : 80),
+    top = 14,
+    bottom = height - 80;
+  const data = rows.slice(-Math.min(chartCount, Math.floor(plot / 4))),
     lo = Math.min(...data.map((r) => r[3])),
     hi = Math.max(...data.map((r) => r[2])),
     pad = (hi - lo) * 0.12 || 1,
     min = lo - pad,
     max = hi + pad,
-    dx = 865 / data.length,
-    y = (p) => 20 + ((max - p) / (max - min)) * 260,
-    vol = Math.max(...data.map((r) => r[5]), 1);
+    dx = plot / data.length,
+    y = (p) => top + ((max - p) / (max - min)) * (bottom - top),
+    vol = Math.max(...data.map((r) => r[5]), 1),
+    volBottom = height - 26;
+  chartGeometry = { width, plot, data };
   let out = "";
   for (let n = 0; n < 5; n++) {
-    let yp = 20 + n * 65;
-    out += `<line x1="0" y1="${yp}" x2="875" y2="${yp}" stroke="#eef2ee"/><text x="887" y="${yp + 4}" fill="#99a99d" font-size="10">${price(max - ((max - min) * n) / 4)}</text>`;
+    const yp = top + (n * (bottom - top)) / 4;
+    out += `<line x1="0" y1="${yp}" x2="${plot}" y2="${yp}" stroke="#e8efeb"/><text x="${plot + 7}" y="${yp + 4}" fill="#708779" font-size="11">${price(max - ((max - min) * n) / 4)}</text>`;
   }
   data.forEach((r, n) => {
     const x = n * dx + dx / 2,
-      c = r[4] >= r[1] ? "#389e80" : "#cf8274";
-    out += `<line x1="${x}" y1="${y(r[2])}" x2="${x}" y2="${y(r[3])}" stroke="${c}" stroke-width="1"/><rect x="${x - dx * 0.29}" y="${Math.min(y(r[1]), y(r[4]))}" width="${dx * 0.58}" height="${Math.max(1, Math.abs(y(r[1]) - y(r[4])))}" fill="${c}" rx=".5"/><rect x="${x - dx * 0.29}" y="${345 - (r[5] / vol) * 45}" width="${dx * 0.58}" height="${(r[5] / vol) * 45}" fill="${c}" opacity=".22"/>`;
-    if (n % Math.max(1, Math.floor(data.length / 5)) === 0)
-      out += `<text x="${Math.max(1, x - 20)}" y="369" fill="#9aab9d" font-size="10">${esc(new Date(r[0]).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" }))}</text>`;
+      c = r[4] >= r[1] ? "#238c70" : "#c2695c";
+    out += `<line x1="${x}" y1="${y(r[2])}" x2="${x}" y2="${y(r[3])}" stroke="${c}"/><rect x="${x - dx * 0.29}" y="${Math.min(y(r[1]), y(r[4]))}" width="${dx * 0.58}" height="${Math.max(1, Math.abs(y(r[1]) - y(r[4])))}" fill="${c}"/><rect x="${x - dx * 0.29}" y="${volBottom - (r[5] / vol) * 35}" width="${dx * 0.58}" height="${(r[5] / vol) * 35}" fill="${c}" opacity=".3"/>`;
+    if (n % Math.max(1, Math.floor(data.length / (width < 500 ? 3 : 5))) === 0)
+      out += `<text x="${Math.max(1, x - 16)}" y="${height - 7}" fill="#708779" font-size="10">${esc(new Date(r[0]).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" }))}</text>`;
   });
-  const last = data.at(-1)[4];
-  out += `<line x1="0" y1="${y(last)}" x2="875" y2="${y(last)}" stroke="#65ab89" stroke-dasharray="3 4" opacity=".7"/><line id="crosshair" x1="0" y1="15" x2="0" y2="347" stroke="#abbbae" stroke-dasharray="3 3" opacity="0"/>`;
+  out += `<line x1="0" y1="${y(data.at(-1)[4])}" x2="${plot}" y2="${y(data.at(-1)[4])}" stroke="#65ab89" stroke-dasharray="3 4"/><line id="crosshair" x1="0" y1="${top}" x2="0" y2="${volBottom}" stroke="#859d8c" stroke-dasharray="3 3" opacity="0"/>`;
   svg.innerHTML = out;
 }
-$("candles").onmousemove = (e) => {
-  if (!rows.length) return;
+$("candles").onpointermove = (e) => {
+  const { width, plot, data } = chartGeometry;
+  if (!data.length) return;
   const rect = $("candles").getBoundingClientRect(),
-    vx = ((e.clientX - rect.left) / rect.width) * 960,
-    data = rows.slice(-chartCount),
+    vx = ((e.clientX - rect.left) / rect.width) * width,
     n = Math.max(
       0,
-      Math.min(data.length - 1, Math.floor((vx / 865) * data.length)),
+      Math.min(data.length - 1, Math.floor((vx / plot) * data.length)),
     ),
     r = data[n];
   $("chartTooltip").hidden = false;
@@ -555,15 +567,18 @@ $("candles").onmousemove = (e) => {
     `${new Date(r[0]).toLocaleString("zh-CN", { hour12: false })} · 开 ${price(r[1])} 高 ${price(r[2])} 低 ${price(r[3])} 收 ${price(r[4])} 量 ${fmt(r[5], 0)}`;
   const line = $("crosshair");
   if (line) {
-    line.setAttribute("x1", (n * 865) / data.length + 432.5 / data.length);
-    line.setAttribute("x2", (n * 865) / data.length + 432.5 / data.length);
+    line.setAttribute("x1", ((n + 0.5) * plot) / data.length);
+    line.setAttribute("x2", ((n + 0.5) * plot) / data.length);
     line.setAttribute("opacity", "1");
   }
 };
-$("candles").onmouseleave = () => {
+$("candles").onpointerleave = () => {
   $("chartTooltip").hidden = true;
   $("crosshair")?.setAttribute("opacity", "0");
 };
+new ResizeObserver(() => requestAnimationFrame(drawChart)).observe(
+  $("chartContainer"),
+);
 $("minScore").oninput = () => {
   scoreDirty = true;
 };
@@ -732,10 +747,17 @@ function bindAccounts() {
         $("closePosition").onsubmit = (e) => {
           e.preventDefault();
           action(async () => {
-            await api(`/api/v2/accounts/${b.dataset.closePosition}/close`, {
-              instrument_id: b.dataset.position,
-              ratio: Number(e.currentTarget.ratio.value),
-            });
+            const result = await api(
+              `/api/v2/accounts/${b.dataset.closePosition}/close`,
+              {
+                instrument_id: b.dataset.position,
+                ratio: Number(e.currentTarget.ratio.value),
+              },
+            );
+            if (result.status !== "filled" && result.status !== "duplicate") {
+              toast(result.reason || "等待 AI 审核，请稍后再次确认");
+              return;
+            }
             $("dialog").close();
             await refresh();
           });
@@ -987,6 +1009,10 @@ $("editWatch").onclick = () => {
       d.exchange = r.querySelector(".watch-exchange").value;
       d.symbol = r.querySelector(".watch-symbol").value.trim().toUpperCase();
       d.group = r.querySelector(".watch-group").value;
+      d.history_enabled = r.querySelector(".watch-history").checked;
+      d.history_interval = Number(
+        r.querySelector(".watch-history-interval").value,
+      );
     });
   }
   function draw() {
@@ -1002,7 +1028,7 @@ $("editWatch").onclick = () => {
             )
             .join(
               "",
-            )}</select><input class="watch-symbol" aria-label="合约名称" value="${esc(i.symbol)}" placeholder="BTC/USDT:USDT"><select class="watch-group" aria-label="相关资产分组"><option value="crypto" ${i.group === "crypto" ? "selected" : ""}>加密资产</option><option value="equity" ${i.group === "equity" ? "selected" : ""}>股票 / ETF</option></select><button class="icon-button remove-watch" data-index="${n}" aria-label="删除交易对">×</button></div>`,
+            )}</select><input class="watch-symbol" aria-label="合约名称" value="${esc(i.symbol)}" placeholder="BTC/USDT:USDT"><select class="watch-group" aria-label="相关资产分组"><option value="crypto" ${i.group === "crypto" ? "selected" : ""}>加密资产</option><option value="equity" ${i.group === "equity" ? "selected" : ""}>股票 / ETF</option></select><button class="icon-button remove-watch" data-index="${n}" aria-label="删除交易对">×</button><div class="history-settings"><label class="check"><input class="watch-history" type="checkbox" ${i.history_enabled ? "checked" : ""}>周期不足时补全参考历史</label><label>抓取间隔 / 秒<input class="watch-history-interval" type="number" min="300" max="86400" step="300" value="${i.history_interval || 3600}" aria-label="抓取间隔秒数"><small>填写秒数，300 = 5 分钟，3600 = 1 小时。按品种限频；先尝试其他交易所，AVGO/SOXL 可用标的股票参考。AI 联网补全已开启时，再检索公开历史表格。</small></label></div></div>`,
       )
       .join("");
     document.querySelectorAll(".remove-watch").forEach(
@@ -1323,6 +1349,7 @@ function fillSettings() {
   f.interval.value = state.preferences.ai_interval;
   f.enabled.checked = state.preferences.ai_enabled;
   f.intervene.checked = state.preferences.ai_intervene;
+  f.actionReview.checked = state.preferences.ai_action_enabled;
   $("aiDataForm").enabled.checked = state.preferences.ai_data_enabled;
   $("aiDataForm").interval.value = String(state.preferences.ai_data_interval);
   renderAIDataStatus();
@@ -1365,6 +1392,26 @@ function renderAIDataStatus() {
   $("requestAIData").disabled =
     !state.preferences.ai_data_enabled || status.state === "running";
   errorAction("aiDataBilling", status.state === "error" ? status.error : null);
+  $("dataDiagnostics").innerHTML =
+    (status.diagnostics || [])
+      .map(
+        (d) =>
+          `<p><b>${esc(state.watchlist.find((i) => i.id === d.instrument_id)?.label || d.instrument_id)} · ${esc(d.category)}</b><br>${esc(d.reason)}</p>`,
+      )
+      .join("") +
+    Object.values(state.source_diagnostics || {})
+      .map(
+        (d) =>
+          `<p><b>${esc(d.source)}</b> · ${d.status === "available" ? "已读取" : "暂不可用"}<br>${esc(d.reason)} · ${time(d.checked_at)}</p>`,
+      )
+      .join("");
+  $("actionReviewStatus").innerHTML = (state.action_reviews || [])
+    .slice(-6)
+    .map(
+      (d) =>
+        `<p>${esc(state.watchlist.find((i) => i.id === d.instrument_id)?.label || d.instrument_id)} · ${esc(d.action)} · ${{ pending: "审核中", ready: "已返回决策", error: "审核不可用" }[d.state] || esc(d.state)}${d.reason ? " · " + esc(d.reason) : ""}</p>`,
+    )
+    .join("");
 }
 $("aiDataForm").onsubmit = (e) => {
   e.preventDefault();
@@ -1419,6 +1466,7 @@ $("aiForm").onsubmit = (e) => {
         ai_interval: Number(f.interval.value),
         ai_enabled: f.enabled.checked,
         ai_intervene: f.intervene.checked,
+        ai_action_enabled: f.actionReview.checked,
       },
       "PUT",
     );

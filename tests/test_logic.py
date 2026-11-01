@@ -88,10 +88,10 @@ def test_management_auth(client, path):
 @pytest.mark.parametrize(
     "params",
     [
-        {"ema_fast": 9},
-        {"ema_slow": 61},
-        {"volume_multiplier": 0.8},
-        {"atr_stop": 4},
+        {"ema_fast": 1},
+        {"ema_slow": 301},
+        {"volume_multiplier": 0.01},
+        {"atr_stop": 11},
         {"target_1_ratio": float("nan")},
         {"target_1": 2.5, "target_2": 2.5},
         {"shell": "rm"},
@@ -266,7 +266,7 @@ def test_passing_does_not_disable_future_reviews(monkeypatch, workspace):
 @pytest.mark.parametrize(
     "scenario,expected",
     [
-        ("too_large", "no_safe_proposal"),
+        ("broad_change", "optimized"),
         ("none", "no_safe_proposal"),
         ("cooldown", "cooldown"),
         ("external", "external_active"),
@@ -277,7 +277,7 @@ def test_optimization_guards(monkeypatch, workspace, scenario, expected):
     add_history(workspace)
     workspace.logic.settings({**ReviewSettings().model_dump(), "auto_optimize": scenario != "off"})
     old = workspace.logic.current()
-    proposal = {**old["parameters"], "ema_fast": 30 if scenario == "too_large" else 22}
+    proposal = {**old["parameters"], "ema_fast": 30 if scenario == "broad_change" else 22}
     mock_review(monkeypatch, workspace, 50, None if scenario == "none" else proposal)
     with workspace.store.transaction() as db:
         if scenario == "cooldown":
@@ -287,7 +287,11 @@ def test_optimization_guards(monkeypatch, workspace, scenario, expected):
         if scenario == "external":
             workspace.store.write(db, "v2_managed", {"a": {"btc": {"qty": 1}}})
     assert workspace.logic.review()["action"] == expected
-    assert workspace.logic.current() == old
+    if expected == "optimized":
+        assert workspace.logic.current()["parameters"]["ema_fast"] == 30
+        assert workspace.logic.state()["archives"][-1]["version"] == old
+    else:
+        assert workspace.logic.current() == old
 
 
 def test_ai_stale_result_does_not_overwrite_edit(monkeypatch, workspace):
@@ -382,7 +386,7 @@ def test_update_source_validation():
         assert str(request.url).startswith(
             "https://raw.githubusercontent.com/Jk-z-Box/QuantPilot/" + "a" * 40
         )
-        return httpx.Response(200, text='[project]\nversion="0.7.0"\n')
+        return httpx.Response(200, text='[project]\nversion="0.8.0"\n')
 
     result = maintenance.latest(httpx.MockTransport(handler))
     assert result["newer"] and result["commit"] == "a" * 40

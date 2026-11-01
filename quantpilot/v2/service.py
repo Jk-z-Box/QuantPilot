@@ -8,6 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from .accounts import PaperBroker, ledger, valuation
+from .action_review import ActionReview
 from .ai import apply_revision, review
 from .ai_client import fingerprint, ready
 from .ai_errors import AIError
@@ -15,12 +16,15 @@ from .chatgpt import ChatGPTConnection
 from .codex_client import CodexConnection
 from .execution import ExchangeBroker
 from .feeds import Feeds
+from .history import History
 from .limits import contract_limits
 from .logic import LogicEngine
 from .market import FuturesMarket
 from .models import Account, Preferences, defaults, policy_matches, signal_policy
+from .notifications import Notifications, emit
 from .research import ResearchEngine
-from .signals import evaluate
+from .rules import effective
+from .signals import evaluate, required_bars
 
 
 class Workspace:
@@ -78,6 +82,11 @@ class Workspace:
         self.codex = CodexConnection()
         self.research = ResearchEngine(self)
         self.logic = LogicEngine(self)
+        self.notifications = Notifications(self)
+        self.history = History(self)
+        self.action_review = ActionReview(self)
+        self.paper.action_review = self.action_review
+        self.exchange.action_review = self.action_review
 
     def codex_action(self, action):
         if action == "activate":
@@ -94,7 +103,13 @@ class Workspace:
             if action == "activate" or prefs["ai_provider"] == "codex":
                 if action == "activate":
                     prefs["ai_provider"] = "codex"
-                prefs.update(ai_enabled=False, ai_intervene=False, ai_data_enabled=False, ai_model="")
+                prefs.update(
+                    ai_enabled=False,
+                    ai_intervene=False,
+                    ai_action_enabled=False,
+                    ai_data_enabled=False,
+                    ai_model="",
+                )
                 self.store.write(db, "v2_preferences", prefs)
             accounts = self.store.read(db, "v2_accounts")
             for account in accounts.values():
@@ -105,6 +120,8 @@ class Workspace:
         return result
 
     def auth_changed(self):
+        if hasattr(self, "action_review"):
+            self.action_review.invalidate()
         if hasattr(self, "logic"):
             self.logic.settings(
                 {**self.store.get("v2_logic")["settings"], "enabled": False, "auto_optimize": False}
@@ -316,7 +333,15 @@ class Workspace:
     def delete_key(self, provider):
         if provider == "openai" and self.store.get("v2_preferences")["ai_provider"] == "api_key":
             prefs = self.store.get("v2_preferences")
-            self.preferences({**prefs, "ai_enabled": False, "ai_intervene": False, "ai_data_enabled": False})
+            self.preferences(
+                {
+                    **prefs,
+                    "ai_enabled": False,
+                    "ai_intervene": False,
+                    "ai_action_enabled": False,
+                    "ai_data_enabled": False,
+                }
+            )
             self.ai_status = "未启用 · 密钥已删除"
         self.vault.delete("v2:" + ("ai:" if provider == "openai" else "feed:") + provider)
         self.feeds.cache.clear()
@@ -343,7 +368,7 @@ class Workspace:
 
     def preferences(self, prefs):
         prefs = Preferences.model_validate(prefs).model_dump()
-        if (prefs["ai_enabled"] or prefs["ai_data_enabled"]) and (
+        if (prefs["ai_enabled"] or prefs["ai_data_enabled"] or prefs["ai_action_enabled"]) and (
             not prefs["ai_model"] or not ready(prefs, self.vault)
         ):
             raise ValueError("请先完成所选 AI 连接并选择模型；官方登录需获准使用 ChatGPT 计划")
@@ -376,6 +401,7 @@ class Workspace:
                     "ai_enabled",
                     "ai_model",
                     "ai_intervene",
+                    "ai_action_enabled",
                     "min_score",
                     "ai_data_enabled",
                 )
@@ -415,6 +441,12 @@ class Workspace:
                     frames[frame] = self.market.candles(item, frame, closed=True)
                 except Exception:
                     frames[frame] = []
+            params = effective(logic["parameters"])
+            frames, history_notes = self.history.supplement(
+                item,
+                frames,
+                required_bars(params),
+            )
             evidence = (
                 self.feeds.evidence(item)
                 if not self.market.demo
@@ -430,6 +462,7 @@ class Workspace:
             )
             if not self.market.demo:
                 evidence = self.research.supplement(item, evidence)
+                evidence += self.history.context(item)
             # Fetch again after slower data providers; never stamp stale quotes with receipt time.
             try:
                 quote = self.market.quote(item)
@@ -445,6 +478,7 @@ class Workspace:
                 prefs["min_score"],
                 logic["parameters"],
             )
+            op["history"] = history_notes
             op["logic_version"] = logic["id"]
             op["demo"] = self.market.demo
             if op.get("id"):
@@ -473,6 +507,7 @@ class Workspace:
                         "ai_enabled",
                         "ai_model",
                         "ai_intervene",
+                        "ai_action_enabled",
                         "ai_data_enabled",
                     )
                 ):
@@ -485,6 +520,14 @@ class Workspace:
                 ):
                     op = apply_revision(op, cached["revision"], cached["at"], prefs["ai_intervene"])
                 self.opportunities[key] = op
+                if op.get("valid"):
+                    with self.store.transaction() as db:
+                        emit(
+                            db,
+                            "opportunity:" + op["id"],
+                            "opportunity",
+                            f"QuantPilot · 有效机会\n{op['exchange']} {op['symbol']}\n方向：{op['direction']} · {op['score']} 分\n有效至：{time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(op['expires_at']))}\n账户仍需独立通过授权和风险检查。",
+                        )
 
     def tick(self):
         items = self.store.get("v2_watchlist")
@@ -579,6 +622,15 @@ class Workspace:
                 self.ai_status = "已完成风险复核"
                 self.ai_error = None
             self.store.record("v2_ai_review", {"count": len(revisions)})
+            with self.store.transaction() as db:
+                for revision in revisions:
+                    if prefs["ai_intervene"] and revision.get("action") not in (None, "hold"):
+                        emit(
+                            db,
+                            f"ai:{self.last_ai}:{revision['instrument_id']}",
+                            "ai",
+                            f"QuantPilot · AI 干预建议\n{revision['instrument_id']} · {revision.get('action')}\n实际执行仍需价格及账户检查。",
+                        )
         except ValueError as exc:
             error = exc if isinstance(exc, AIError) else AIError("invalid_response")
             # Ignore failures from a request whose settings were changed while in flight.
@@ -633,14 +685,20 @@ class Workspace:
                                 sign = 1 if position["side"] == "long" else -1
                                 trigger = (
                                     float(position["entry"])
-                                    + (float(position["entry"]) - float(position["stop"])) * 0.75
+                                    + (float(position["entry"]) - float(position["stop"]))
+                                    * effective(position.get("parameters"))["add_trigger_r"]
                                 )
                                 if (quotes[key]["mid"] - trigger) * sign < 0:
                                     continue
-                            self.paper.enter(account, op, quotes, items, prefs["profile"], adding)
+                            result = self.paper.enter(account, op, quotes, items, prefs["profile"], adding)
                         else:
-                            self.exchange.enter(account, op, quotes, items, prefs["profile"])
-                        self.errors.pop(aid, None)
+                            result = self.exchange.enter(account, op, quotes, items, prefs["profile"])
+                        if result.get("status") in ("duplicate", "duplicate_or_pending"):
+                            self.errors[aid] = (
+                                "本账户已执行过当前信号，或同一订单正在核对；等待新的已收盘 K 线信号，不重复开仓。"
+                            )
+                        else:
+                            self.errors.pop(aid, None)
                     except ValueError as exc:
                         self.errors[aid] = str(exc)
             except Exception:
@@ -682,7 +740,7 @@ class Workspace:
                 for r in db.execute("SELECT * FROM v2_orders ORDER BY created DESC LIMIT 100")
             ]
         return {
-            "version": "0.6.0",
+            "version": "0.7.0",
             "now": now,
             "demo": self.market.demo,
             "watchlist": self.store.get("v2_watchlist"),
@@ -696,12 +754,16 @@ class Workspace:
             },
             "ai_status": self.ai_status,
             "ai_error": copy.deepcopy(self.ai_error),
+            "source_diagnostics": getattr(self.feeds, "diagnostics", {}),
             "ai_data_status": self.store.get("v2_ai_data_status"),
             "ai_data_evidence": self.research.observations(),
             "last_evaluation": self.last_evaluation,
             "providers": {name: bool(self.vault.get("v2:feed:" + name)) for name in ("coinglass", "finnhub")},
             "chatgpt": self.chatgpt.status(),
             "codex": self.codex.status(),
+            "notifications": self.notifications.state(),
+            "action_reviews": self.action_review.state(),
+            "history": self.history.state(),
             "ai_key_saved": bool(self.vault.get("v2:ai:openai")),
         }
 
@@ -734,6 +796,7 @@ class Workspace:
         self.thread = threading.Thread(target=loop, name="mission-control", daemon=True)
         self.thread.start()
         self.research.start()
+        self.notifications.start()
 
         def logic_loop():
             while not self.stop_event.wait(15):
@@ -746,6 +809,8 @@ class Workspace:
 
     def stop(self):
         self.stop_event.set()
+        self.action_review.pool.shutdown(wait=False, cancel_futures=True)
+        self.history.pool.shutdown(wait=False, cancel_futures=True)
         if self.research.thread:
             self.research.thread.join(timeout=3)
         if self.thread:

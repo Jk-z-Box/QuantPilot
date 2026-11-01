@@ -101,3 +101,84 @@ def company_news(get, asset, now):
         "note": "免费标题与原文链接；新闻索引不是已核实事实，不提供完整财报日历，不据此推算财报时间。",
         "details": {"news": news[:10], "events": [], "checked_at": now},
     }
+
+
+FARSIDE = {
+    "BTC": "bitcoin-etf-flow-all-data",
+    "ETH": "ethereum-etf-flow-all-data",
+    "SOL": "solana-etf-flow-all-data",
+}
+
+
+def farside_etf(html, asset, now):
+    from html.parser import HTMLParser
+
+    class Table(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.rows, self.row, self.cell = [], [], None
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "tr":
+                self.row = []
+            if tag in ("td", "th"):
+                self.cell = []
+
+        def handle_data(self, data):
+            if self.cell is not None:
+                self.cell.append(data)
+
+        def handle_endtag(self, tag):
+            if tag in ("td", "th") and self.cell is not None:
+                self.row.append(" ".join("".join(self.cell).split()))
+                self.cell = None
+            if tag == "tr" and self.row:
+                self.rows.append(self.row)
+
+    table = Table()
+    table.feed(html)
+    valid = []
+    for row in table.rows:
+        try:
+            date = dt.datetime.strptime(row[0], "%d %b %Y").date()
+        except ValueError:
+            continue
+        if len(row) < 4 or not re.fullmatch(r"\(?-?[\d,]+(?:\.\d+)?\)?", row[-1]):
+            continue
+        # A total is a publisher-reported aggregate, not proof that every fund has reported.
+        raw = row[-1].replace(",", "")
+        total = -float(raw[1:-1]) if raw.startswith("(") else float(raw)
+        stamp = dt.datetime.combine(date, dt.time(16), ZoneInfo("America/New_York")).timestamp()
+        if stamp <= now and math.isfinite(total):
+            valid.append((stamp, total, date, any(v in ("", "-", "—") for v in row[1:-1])))
+    if not valid:
+        raise ValueError("未找到带日期的 ETF 汇总")
+    stamp, total, date, incomplete = max(valid)
+    return {
+        "category": "etf",
+        "source": "Farside Investors · 公开已披露汇总",
+        "url": "https://farside.co.uk/" + FARSIDE[asset] + "/",
+        "published_at": stamp,
+        "expires_at": stamp + 4 * 86400,
+        "status": "fresh" if now - stamp < 4 * 86400 else "stale",
+        "bias": "neutral"
+        if incomplete
+        else "bullish"
+        if total > 0
+        else "bearish"
+        if total < 0
+        else "neutral",
+        "value": total * 1_000_000,
+        "note": f"{date} {asset} ETF 汇总（USD）；按美东收盘标记。"
+        + (
+            "部分基金列为空或横线，只计中性覆盖，不视为完整全日资金流。"
+            if incomplete
+            else "来自公开表格的已披露值，非盘中实时数据。"
+        ),
+        "details": {
+            "session": str(date),
+            "net_flow_usd": total * 1_000_000,
+            "partial": incomplete,
+            "retrieved_at": now,
+        },
+    }

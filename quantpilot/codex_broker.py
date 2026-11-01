@@ -109,7 +109,7 @@ class Protocol:
             self.call(
                 "initialize",
                 {
-                    "clientInfo": {"name": "quantpilot", "title": "QuantPilot", "version": "0.6.0"},
+                    "clientInfo": {"name": "quantpilot", "title": "QuantPilot", "version": "0.7.0"},
                     "capabilities": {"experimentalApi": True},
                 },
                 15,
@@ -318,9 +318,11 @@ class Broker:
             "opportunity_review",
             "strategy_review",
             "public_observations",
+            "action_approval",
+            "history_table",
         ):
             raise AIError("parameters")
-        research = fmt["name"] == "public_observations"
+        research = fmt["name"] in ("public_observations", "history_table")
         if not isinstance(fmt.get("schema"), dict) or not isinstance(payload.get("input"), str):
             raise AIError("parameters")
         rpc, turn_id = self.connection(), None

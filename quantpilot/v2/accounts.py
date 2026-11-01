@@ -10,6 +10,8 @@ from ..market import decimal as D
 from .logic import check_version
 from .margin import estimates, mode
 from .models import PROFILES, policy_matches
+from .notifications import trade_event
+from .rules import effective
 
 FEE = D(".0005")
 SLIP = D(".0002")
@@ -117,6 +119,9 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
     if not snap["valuation_valid"] or book["halted"]:
         raise ValueError("账户估值失败或已暂停")
     rule = PROFILES[profile]
+    parameters = effective(opportunity.get("parameters"))
+    if not parameters["entry_enabled"] or (adding and not parameters["add_enabled"]):
+        raise ValueError("量化逻辑已关闭此开仓或加仓动作")
     equity, free = D(snap["equity"]), D(snap["available"])
     if equity <= 0:
         raise ValueError("账户权益不足")
@@ -146,7 +151,7 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
     if distance <= 0:
         raise ValueError("止损方向无效")
     add_count = sizing["add_count"] if sizing["add_count"] is not None else rule["adds"]
-    ratios = sizing["add_ratios"] or [0.25] * add_count
+    ratios = sizing["add_ratios"] or [parameters["add_default_ratio"]] * add_count
     cap = (
         D(sizing["quantity"]) * (1 + sum(map(D, ratios)))
         if sizing["mode"] == "fixed"
@@ -157,7 +162,7 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
         max(D(0), (D(p["entry"]) - D(p["stop"])) * (1 if p["side"] == "long" else -1)) * D(p["qty"])
         for p in book["positions"].values()
     )
-    risk_budget = max(D(0), equity * D(rule["risk"]) * 3 - risk_used)
+    risk_budget = max(D(0), equity * D(rule["risk"]) * D(parameters["portfolio_risk_multiple"]) - risk_used)
     risk_amount = min(equity * D(rule["risk"]), risk_budget) / (distance / price + 2 * FEE + 2 * SLIP)
     correlated = sum(
         D(p["qty"]) * D(quotes.get(k, {}).get("mid", p["entry"]))
@@ -167,7 +172,7 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
     headroom = min(
         (cap - existing) * price,
         equity * D(rule["exposure"]) - D(snap["exposure"]),
-        equity * D(rule["exposure"]) * D(".75") - correlated,
+        equity * D(rule["exposure"]) * D(parameters["group_exposure_fraction"]) - correlated,
         free * leverage * D(".95"),
         risk_amount,
     )
@@ -180,13 +185,15 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
             not old
             or old["adds"] >= add_count
             or old["tp_done"]
-            or opportunity["score"] < min(100, min_score + 5)
+            or opportunity["score"] < min(100, min_score + parameters["add_score_bonus"])
         ):
             raise ValueError("未满足加仓条件")
         if not old.get("initial_qty"):
             raise ValueError("旧仓位缺少初始币数量，不允许自动加仓")
         target = D(old["initial_qty"]) * D(ratios[old["adds"]]) * price
-        if price * (1 if side == "long" else -1) <= D(old["entry"]) * (1 if side == "long" else -1):
+        if parameters["profitable_add_only"] and price * (1 if side == "long" else -1) <= D(old["entry"]) * (
+            1 if side == "long" else -1
+        ):
             raise ValueError("不允许亏损加仓")
     elif old:
         raise ValueError("已有仓位")
@@ -234,6 +241,7 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
 class PaperBroker:
     def __init__(self, store):
         self.store = store
+        self.action_review = None
 
     def record(self, db, identity, account_id, action, detail):
         db.execute(
@@ -241,9 +249,17 @@ class PaperBroker:
             (identity, account_id, action, "filled", json.dumps(detail), time.time()),
         )
         self.store.audit(db, "v2_" + action, {"account_id": account_id, **detail})
+        trade_event(self.store, db, identity, account_id, action, detail)
 
     def enter(self, account, opportunity, quotes, instruments, profile, adding=False):
         now, aid, key = time.time(), account["id"], opportunity["instrument_id"]
+        if self.action_review:
+            verdict = self.action_review.inspect(
+                aid, key, "add" if adding else "open", quotes.get(key), opportunity
+            )
+            if verdict["state"] != "approved":
+                raise ValueError(verdict["reason"])
+            opportunity = verdict["opportunity"]
         with self.store.transaction() as db:
             accounts = self.store.read(db, "v2_accounts")
             current = accounts.get(aid)
@@ -256,6 +272,8 @@ class PaperBroker:
             book = books[aid]
             old = book["positions"].get(key)
             check_version(self.store, db, opportunity, old)
+            if self.action_review:
+                self.action_review.commit_check(db, aid, opportunity)
             n = old["adds"] + 1 if adding and old else 0
             identity = hashlib.sha256(
                 f"{aid}:{book['generation']}:{opportunity['id']}:{n}".encode()
@@ -280,6 +298,7 @@ class PaperBroker:
                 old["liquidation"] = sizing["liquidation"]
             else:
                 book["positions"][key] = {
+                    "parameters": opportunity.get("parameters", {}),
                     "logic_version": opportunity.get("logic_version"),
                     "logic_trade_id": identity,
                     "logic_symbol": opportunity["symbol"],
@@ -321,6 +340,11 @@ class PaperBroker:
             return {"status": "filled", **detail}
 
     def close(self, aid, key, quote, ratio=1, reason="manual", target=None):
+        if self.action_review:
+            verdict = self.action_review.inspect(aid, key, reason, quote, ratio=ratio)
+            if verdict["state"] not in ("approved", "fallback"):
+                return {"status": verdict["state"], "reason": verdict["reason"]}
+            ratio = verdict["ratio"]
         if not quote or quote.get("error") or not -5 <= time.time() - quote.get("timestamp", 0) <= 15:
             raise ValueError("缺少新鲜报价，无法按旧价模拟平仓")
         if not 0 < ratio <= 1:
@@ -348,9 +372,10 @@ class PaperBroker:
             if target is not None:
                 p["tp_done"].append(target)
                 # A first take profit moves protection to breakeven, never loosens it.
-                p["stop"] = str(
-                    max(D(p["stop"]), D(p["entry"])) if sign == 1 else min(D(p["stop"]), D(p["entry"]))
-                )
+                if effective(p.get("parameters"))["breakeven_enabled"]:
+                    p["stop"] = str(
+                        max(D(p["stop"]), D(p["entry"])) if sign == 1 else min(D(p["stop"]), D(p["entry"]))
+                    )
             if reason == "risk_reduce":
                 p["risk_reduced"] = True
             p["logic_net"] = str(D(p.get("logic_net", 0)) + pnl - fee)
@@ -405,6 +430,7 @@ class PaperBroker:
         aid = account["id"]
         book = self.store.get("v2_ledgers")[aid]
         for key, p in list(book["positions"].items()):
+            parameters = effective(p.get("parameters"))
             q = quotes.get(key)
             if not q or q.get("error") or not -5 <= time.time() - q.get("timestamp", 0) <= 15:
                 continue
@@ -427,24 +453,39 @@ class PaperBroker:
                 self.close(aid, key, q, reason="liquidation_distance")
                 continue
             for i, target in enumerate(p["targets"]):
-                if i not in p["tp_done"] and (price - D(target["price"])) * sign >= 0:
+                if (
+                    target.get("enabled", True)
+                    and i not in p["tp_done"]
+                    and (price - D(target["price"])) * sign >= 0
+                ):
                     self.close(aid, key, q, target["ratio"], "take_profit", i)
             opportunity = opportunities.get(key)
             if not opportunity:
                 continue
-            if opportunity.get("direction") not in (p["side"], "wait", "flat"):
+            if parameters["trend_exit_enabled"] and opportunity.get("direction") not in (
+                p["side"],
+                "wait",
+                "flat",
+            ):
                 self.close(aid, key, q, reason="trend_reversal")
             elif (
-                any("事件风险" in b for b in opportunity.get("blockers", []))
-                or opportunity.get("ai", {}).get("action") == "close"
-            ):
+                parameters["event_exit_enabled"]
+                and any("事件风险" in b for b in opportunity.get("blockers", []))
+            ) or opportunity.get("ai", {}).get("action") == "close":
                 self.close(aid, key, q, reason="event_risk")
             elif (
-                not opportunity.get("valid")
-                or opportunity.get("expires_at", 0) <= time.time()
+                (
+                    parameters["invalid_signal_reduce_enabled"]
+                    and (not opportunity.get("valid") or opportunity.get("expires_at", 0) <= time.time())
+                )
+                or (
+                    parameters["price_reduce_enabled"]
+                    and (price - D(p["entry"])) * sign
+                    <= -abs(D(p["entry"]) - D(p["stop"])) * D(parameters["reduce_trigger_r"])
+                )
                 or opportunity.get("ai", {}).get("action") == "reduce"
             ) and not p["risk_reduced"]:
-                self.close(aid, key, q, 0.5, "risk_reduce")
+                self.close(aid, key, q, parameters["risk_reduce_ratio"], "risk_reduce")
             ai = opportunity.get("ai", {})
             if (
                 ai.get("intervention_enabled")

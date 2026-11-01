@@ -14,6 +14,8 @@ from .limits import contract_limits
 from .logic import check_version
 from .margin import mode
 from .models import policy_matches
+from .notifications import trade_event
+from .rules import effective
 
 
 class ExchangeBroker:
@@ -81,7 +83,7 @@ class ExchangeBroker:
                 "cross_margin",
             )
             ready = (
-                cert["version"] == "0.6.0"
+                cert["version"] == "0.7.0"
                 and cert["exchange"] == account["exchange"]
                 and cert["credential_fingerprint"] == fingerprint
                 and all(cert["checks"].get(k) is True for k in required)
@@ -152,6 +154,9 @@ class ExchangeBroker:
 
     def persist(self, identity, state, result):
         with self.store.transaction() as db:
+            row = db.execute("SELECT account_id,action FROM v2_orders WHERE id=?", (identity,)).fetchone()
+            if row and state in ("filled", "emergency_closed"):
+                trade_event(self.store, db, identity, row["account_id"], row["action"], result)
             db.execute(
                 "UPDATE v2_orders SET state=?,result=? WHERE id=?", (state, json.dumps(result), identity)
             )
@@ -194,9 +199,18 @@ class ExchangeBroker:
             adding = bool(existing)
             if adding:
                 sign = 1 if existing["side"] == "long" else -1
-                trigger = D(existing["entry"]) + (D(existing["entry"]) - D(existing["stop"])) * D(".75")
+                trigger = D(existing["entry"]) + (D(existing["entry"]) - D(existing["stop"])) * D(
+                    effective(existing.get("parameters"))["add_trigger_r"]
+                )
                 if (D(quotes[key]["mid"]) - trigger) * sign < 0:
                     raise ValueError("未到加仓观察价")
+            if getattr(self, "action_review", None):
+                verdict = self.action_review.inspect(
+                    aid, key, "add" if adding else "open", quotes.get(key), opportunity
+                )
+                if verdict["state"] != "approved":
+                    raise ValueError(verdict["reason"])
+                opportunity = verdict["opportunity"]
             min_score = self.store.get("v2_preferences")["min_score"]
             sizing = size_order(
                 account, book, opportunity, quotes, instruments, profile, time.time(), adding, min_score
@@ -236,6 +250,8 @@ class ExchangeBroker:
             with self.store.transaction() as db:
                 current = self.store.read(db, "v2_accounts").get(aid)
                 check_version(self.store, db, opportunity, existing)
+                if getattr(self, "action_review", None):
+                    self.action_review.commit_check(db, aid, opportunity)
                 if (
                     current != account
                     or not current["auto"]
@@ -320,6 +336,8 @@ class ExchangeBroker:
                 targets = []
                 remaining = D(filled)
                 for i, t in enumerate(opportunity["plan"]["targets"]):
+                    if not t.get("enabled", True):
+                        continue
                     qty = (
                         D(client.amount_to_precision(item["symbol"], str(D(filled) * D(t["ratio"]))))
                         if i == 0
@@ -385,6 +403,7 @@ class ExchangeBroker:
                         else str(base_qty * D(order.get("average") or sizing["price"]))
                     )
                     positions[key] = {
+                        "parameters": opportunity.get("parameters", {}),
                         "logic_version": old.get("logic_version")
                         if old
                         else opportunity.get("logic_version"),
@@ -410,6 +429,19 @@ class ExchangeBroker:
                     db.execute(
                         "UPDATE v2_orders SET state='protected',result=? WHERE id=?",
                         (json.dumps(result), identity),
+                    )
+                    trade_event(
+                        self.store,
+                        db,
+                        identity,
+                        aid,
+                        "add" if adding else "open",
+                        {
+                            **result,
+                            "qty": str(base_qty),
+                            "price": order.get("average") or str(sizing["price"]),
+                            "side": opportunity["direction"],
+                        },
                     )
                 return {"status": "protected", **result}
             except Exception:
@@ -528,6 +560,58 @@ class ExchangeBroker:
                 failed.append(oid)
         return failed
 
+    def notify_native_fills(self, account, key, position, client):
+        checks = getattr(self, "notification_checks", {})
+        if time.time() - checks.get((account["id"], key), 0) < 15:
+            return
+        self.notification_checks = checks
+        checks[(account["id"], key)] = time.time()
+        for leg in position["legs"]:
+            refs = [(leg["stop_id"], "stop_loss", True)] + [
+                (oid, "take_profit", False) for oid in leg["target_ids"]
+            ]
+            for oid, reason, is_stop in refs:
+                try:
+                    fill = client.fetch_order(oid, position["symbol"], {"stop": True} if is_stop else {})
+                    quantity = D(fill.get("filled") or 0)
+                    if quantity <= 0:
+                        continue
+                    cs = D(client.market(position["symbol"])["contractSize"])
+                    with self.store.transaction() as db:
+                        db.execute(
+                            "CREATE TABLE IF NOT EXISTS notification_fills(identity TEXT PRIMARY KEY, quantity TEXT NOT NULL)"
+                        )
+                        identity = f"{account['id']}:{oid}"
+                        old = db.execute(
+                            "SELECT quantity FROM notification_fills WHERE identity=?", (identity,)
+                        ).fetchone()
+                        previous = D(old[0]) if old else D(0)
+                        if quantity <= previous:
+                            continue
+                        db.execute(
+                            "INSERT OR REPLACE INTO notification_fills VALUES (?,?)",
+                            (identity, str(quantity)),
+                        )
+                        trade_event(
+                            self.store,
+                            db,
+                            f"native:{identity}:{quantity}",
+                            account["id"],
+                            "close",
+                            {
+                                "instrument_id": key,
+                                "side": position["side"],
+                                "qty": str((quantity - previous) * cs),
+                                "price": fill.get("average"),
+                                "reason": reason,
+                            },
+                        )
+                except Exception:
+                    # Unconfirmed fills are never announced as executions. Existing protection remains.
+                    self.store.record(
+                        "notification_fill_unavailable", {"account_id": account["id"], "instrument_id": key}
+                    )
+
     def manage(self, account, quotes, opportunities, instruments):
         aid = account["id"]
         managed = self.store.get("v2_managed").get(aid, {})
@@ -541,9 +625,11 @@ class ExchangeBroker:
                 external[aid] = snapshot
                 self.store.write(db, "v2_external", external)
             for key, p in list(managed.items()):
+                parameters = effective(p.get("parameters"))
                 if key not in account["allowed"] or key not in instruments:
                     self.freeze(aid, "持仓交易对授权已移除，原生保护单保留，请人工核对")
                     continue
+                self.notify_native_fills(account, key, p, client)
                 current = next((x for x in snapshot["positions"] if x["symbol"] == p["symbol"]), None)
                 if not current:
                     all_failed = []
@@ -593,17 +679,51 @@ class ExchangeBroker:
                 liq = D(current.get("liquidationPrice") or 0)
                 close = (
                     protection_missing
-                    or op.get("direction") not in (p["side"], "wait", "flat")
-                    or any("事件风险" in b for b in op.get("blockers", []))
+                    or (
+                        parameters["trend_exit_enabled"]
+                        and op.get("direction") not in (p["side"], "wait", "flat")
+                    )
+                    or (
+                        parameters["event_exit_enabled"]
+                        and any("事件风险" in b for b in op.get("blockers", []))
+                    )
                     or op.get("ai", {}).get("action") == "close"
                     or (liq > 0 and (price - liq) * sign / price < D(".05"))
                     or (price - D(p["stop"])) * sign <= 0
                 )
                 reduce = (
-                    not op.get("valid")
-                    or op.get("expires_at", 0) <= time.time()
+                    (
+                        parameters["invalid_signal_reduce_enabled"]
+                        and (not op.get("valid") or op.get("expires_at", 0) <= time.time())
+                    )
+                    or (
+                        parameters["price_reduce_enabled"]
+                        and (price - D(p["entry"])) * sign
+                        <= -abs(D(p["entry"]) - D(p["stop"])) * D(parameters["reduce_trigger_r"])
+                    )
                     or op.get("ai", {}).get("action") == "reduce"
                 ) and not p["risk_reduced"]
+                if close or reduce:
+                    exit_ratio = 1 if close else parameters["risk_reduce_ratio"]
+                    if getattr(self, "action_review", None):
+                        reason = (
+                            "protection_missing"
+                            if protection_missing
+                            else "stop_loss"
+                            if (price - D(p["stop"])) * sign <= 0
+                            else "liquidation_distance"
+                            if liq > 0 and (price - liq) * sign / price < D(".05")
+                            else "risk_exit"
+                            if close
+                            else "risk_reduce"
+                        )
+                        verdict = self.action_review.inspect(aid, key, reason, q, ratio=exit_ratio)
+                        if verdict["state"] not in ("approved", "fallback"):
+                            continue
+                        exit_ratio = verdict["ratio"]
+                        if verdict.get("position_adjustment"):
+                            op = {**op, "ai": verdict["position_adjustment"]}
+                            close = reduce = False
                 if close or reduce:
                     identity = (
                         "qp"
@@ -619,9 +739,7 @@ class ExchangeBroker:
                             (identity, aid, "close", "sending", "{}", time.time()),
                         )
                     try:
-                        amount = float(
-                            client.amount_to_precision(p["symbol"], str(qty if close else qty / 2))
-                        )
+                        amount = float(client.amount_to_precision(p["symbol"], str(qty * D(exit_ratio))))
                         if amount <= 0:
                             raise ValueError("减仓量低于精度")
                         result = self.order(

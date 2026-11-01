@@ -8,57 +8,33 @@ let logicState = null,
   checkedUpdate = null,
   managementBusy = false;
 window.refreshSeconds = 5;
-const parameterFields = [
-  ["ema_fast", "快速 EMA 周期", 10, 30, 1, "用于周线、日线、4H 和 1H。"],
-  ["ema_slow", "慢速 EMA 周期", 40, 60, 1, "与快速 EMA 比较，判断趋势方向。"],
-  ["rsi_period", "RSI 周期", 7, 21, 1, "多头动量区间 43–70，空头 30–57。"],
-  [
-    "volume_multiplier",
-    "成交量确认倍数",
-    1,
-    2,
-    0.05,
-    "乘以风险偏好的成交量门槛；1 表示原门槛。",
-  ],
-  [
-    "atr_stop",
-    "ATR 止损倍数",
-    1.5,
-    3,
-    0.1,
-    "止损距离 = ATR × 此倍数。仓位仍受风险额度限制。",
-  ],
-  [
-    "target_1",
-    "止盈 1 / 风险倍数",
-    1.2,
-    2.5,
-    0.1,
-    "1.5 表示止盈距离是初始止损距离的 1.5 倍。",
-  ],
-  [
-    "target_2",
-    "止盈 2 / 风险倍数",
-    2.5,
-    5,
-    0.1,
-    "须高于第一档；剩余仓位在这一档平仓。",
-  ],
-  [
-    "target_1_ratio",
-    "止盈 1 平仓比例",
-    0.25,
-    0.75,
-    0.05,
-    "0.5 = 平仓 50%，第二档自动平剩余 50%。",
-  ],
-];
-$("logicFields").innerHTML = parameterFields
-  .map(
-    ([key, label, min, max, step, hint]) =>
-      `<label>${label}<input name="${key}" type="number" min="${min}" max="${max}" step="${step}" required /><small>${hint}</small></label>`,
-  )
-  .join("");
+let parameterFields = [];
+function renderParameterFields(schema) {
+  const properties = schema.properties;
+  parameterFields = Object.entries(properties)
+    .filter(([k]) => k !== "overrides")
+    .map(([k, v]) => [k, v.title, v.minimum, v.maximum, v.type]);
+  const groups = [
+    ...new Set(
+      Object.values(properties)
+        .map((v) => v.group)
+        .filter(Boolean),
+    ),
+  ];
+  $("logicFields").innerHTML = groups
+    .map(
+      (group) =>
+        `<details class="parameter-group"><summary>${esc(group)}</summary><div class="parameter-grid">${parameterFields
+          .filter(([k]) => properties[k].group === group)
+          .map(([key, label, min, max, type]) =>
+            type === "boolean"
+              ? `<label class="check"><input name="${key}" type="checkbox">${esc(label)}</label>`
+              : `<div class="parameter-field"><label for="logic_${key}">${esc(label)}</label><input id="logic_${key}" name="${key}" type="number" min="${min}" max="${max}" step="${type === "integer" ? 1 : "any"}" required><label class="override-row"><input type="checkbox" name="override_${key}" aria-label="启用 ${esc(label)} 数值覆盖" checked>使用自定值 · 关闭恢复 ${properties[key].default}</label></div>`,
+          )
+          .join("")}</div></details>`,
+    )
+    .join("");
+}
 const sources = {
   initial: "初始版本",
   manual: "手动编辑",
@@ -85,6 +61,8 @@ function fillForm(form, values) {
   Object.entries(values).forEach(([key, value]) => {
     const input = form.elements.namedItem(key);
     if (!input) return;
+    const override = form.elements.namedItem("override_" + key);
+    if (override) override.checked = values.overrides?.[key] !== false;
     if (input.type === "checkbox") input.checked = value;
     else input.value = value;
   });
@@ -126,6 +104,8 @@ async function loadManagement(force = false) {
       // A dirty editor retains the version it was opened against.
       if (!logicDirty) $("logicForm").dataset.version = fresh.current.id;
       logicState = fresh;
+      if (!parameterFields.length)
+        renderParameterFields(fresh.parameter_schema);
       $("logicVersion").textContent = fresh.current.id.slice(0, 8);
       $("logicCreated").textContent =
         `${sources[fresh.current.source]} · ${time(fresh.current.created_at)}`;
@@ -222,11 +202,18 @@ $("logicForm").onsubmit = (e) => {
   action(async () => {
     const f = e.currentTarget,
       parameters = Object.fromEntries(
-        parameterFields.map(([k]) => [
+        parameterFields.map(([k, , , , type]) => [
           k,
-          Number(f.elements.namedItem(k).value),
+          type === "boolean"
+            ? f.elements.namedItem(k).checked
+            : Number(f.elements.namedItem(k).value),
         ]),
       );
+    parameters.overrides = Object.fromEntries(
+      parameterFields
+        .filter(([, , , , t]) => t !== "boolean")
+        .map(([k]) => [k, f.elements.namedItem("override_" + k).checked]),
+    );
     await api(
       "/api/v2/logic",
       {

@@ -146,7 +146,7 @@ class FuturesMarket:
             with self.locks[item["exchange"]]:
                 client = self.client(item["exchange"])
                 self.instrument(client, item["symbol"])
-                rows = client.fetch_ohlcv(item["symbol"], frame, limit=180)
+                rows = client.fetch_ohlcv(item["symbol"], frame, limit=420)
         valid = []
         for row in rows:
             values = [float(v) for v in row[:6]]

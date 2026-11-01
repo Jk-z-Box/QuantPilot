@@ -9,6 +9,7 @@ from pydantic import Field, SecretStr
 from .ai import list_models
 from .logic import Edit, Import, Restore, ReviewSettings
 from .models import Account, AccountSecrets, Evidence, Instrument, KeyInput, Model, Preferences, Reset
+from .notifications import NotificationSettings, TelegramKey
 
 
 class Watchlist(Model):
@@ -49,6 +50,26 @@ def install(app, workspace, session, mutation):
     @app.get("/api/v2/state", dependencies=[Depends(session)])
     def state():
         return workspace.state()
+
+    @app.get("/api/v2/notifications", dependencies=[Depends(session)])
+    def notifications(after: int | None = None):
+        return workspace.notifications.state(after)
+
+    @app.put("/api/v2/notifications", dependencies=[Depends(mutation)])
+    def notification_settings(body: NotificationSettings):
+        return safe(workspace.notifications.settings, body.model_dump())
+
+    @app.put("/api/v2/notifications/telegram", dependencies=[Depends(mutation)])
+    def telegram_key(body: TelegramKey):
+        return safe(workspace.notifications.key, body)
+
+    @app.delete("/api/v2/notifications/telegram", dependencies=[Depends(mutation)])
+    def telegram_delete():
+        return safe(workspace.notifications.delete_key)
+
+    @app.post("/api/v2/notifications/test", dependencies=[Depends(mutation)])
+    def telegram_test():
+        return safe(workspace.notifications.test)
 
     @app.get("/api/v2/models", dependencies=[Depends(session)])
     def models(provider: Literal["api_key", "chatgpt", "codex"] = "api_key"):
@@ -121,15 +142,26 @@ def install(app, workspace, session, mutation):
         item = next((i for i in workspace.store.get("v2_watchlist") if i["id"] == instrument_id), None)
         if not item:
             raise HTTPException(404, "交易对不存在")
+        if frame not in ("5m", "15m", "1h", "4h", "1d", "1w"):
+            raise HTTPException(422, "不支持的周期")
         try:
-            return {
-                "candles": workspace.market.candles(item, frame),
-                "frame": frame,
-                "fetched_at": time.time(),
-                "demo": workspace.market.demo,
-            }
+            rows = workspace.market.candles(item, frame)
         except Exception:
-            raise HTTPException(503, "K 线暂不可用；请检查合约、周期和行情连接") from None
+            rows = []
+        selected, notes = (
+            workspace.history.supplement(item, {frame: rows})
+            if frame in ("1w", "1d", "4h")
+            else ({frame: rows}, {})
+        )
+        if not selected.get(frame):
+            raise HTTPException(503, "K 线暂不可用；已启用补全时会在后台检索参考历史")
+        return {
+            "candles": selected[frame],
+            "frame": frame,
+            "fetched_at": time.time(),
+            "demo": workspace.market.demo,
+            "reference": notes.get(frame) if notes.get(frame, {}).get("status") == "reference" else None,
+        }
 
     @app.put("/api/v2/preferences", dependencies=[Depends(mutation)])
     def preferences(body: Preferences):
