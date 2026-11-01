@@ -14,7 +14,7 @@ from pydantic import Field
 
 from . import ai_client
 from .ai_errors import AIError
-from .models import Model
+from .models import Model, pair_enabled
 from .notifications import emit
 
 PROTECTIVE = {"stop_loss", "take_profit", "liquidation_distance", "protection_missing"}
@@ -66,6 +66,7 @@ class ActionReview:
         self.workspace = workspace
         self.lock = threading.RLock()
         self.jobs = {}
+        self.last_requests = {}
         self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="action-review")
 
     def inspect(self, aid, key, action, quote, opportunity=None, ratio=1):
@@ -78,6 +79,13 @@ class ActionReview:
         account = accounts.get(aid)
         if not account:
             raise ValueError("账户不存在")
+        if not pair_enabled(account, key):
+            if action in ("open", "add"):
+                raise ValueError("交易对未在此账户启用，不请求 AI 审核")
+            return {"state": "approved", "opportunity": opportunity, "ratio": ratio}
+        if action in ("open", "add") and (not account["auto"] or prefs["halted"]):
+            raise ValueError("账户自动交易已暂停，不请求 AI 审核")
+        interval = prefs["evaluation_interval"]
         book = (
             w.store.get("v2_ledgers").get(aid, {})
             if account["kind"] == "paper"
@@ -108,9 +116,22 @@ class ActionReview:
         identity = hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()
         now = time.time()
         with self.lock:
-            self.jobs = {k: v for k, v in self.jobs.items() if now - v["at"] < 120}
+            self.jobs = {k: v for k, v in self.jobs.items() if now - v["at"] < max(120, interval * 2 + 45)}
             job = self.jobs.get(identity)
+            if job and job["state"] == "error" and now - job["at"] >= interval:
+                job = None
             if job is None:
+                bucket = (aid, key)
+                if now - self.last_requests.get(bucket, 0) < interval:
+                    if protective:
+                        return {
+                            "state": "fallback",
+                            "ratio": ratio,
+                            "opportunity": opportunity,
+                            "reason": "审核周期未到，既有止盈止损继续执行",
+                        }
+                    return {"state": "pending", "reason": "等待下一次机会评估 / AI 审核周期"}
+                self.last_requests[bucket] = now
                 job = {
                     "at": now,
                     "state": "pending",
@@ -140,6 +161,11 @@ class ActionReview:
                             (s for s in account["sizing"] if s["instrument_id"] == key), None
                         ),
                     }
+                    if hasattr(w, "position_reviews"):
+                        held_plan = w.position_reviews.held(account).get(key)
+                        payload["account_position_plan"] = (
+                            w.position_reviews.plan(account, key, held_plan) if held_plan else None
+                        )
                     self.pool.submit(self.run, identity, prefs, payload)
             if job["state"] == "pending" and now > job["deadline"]:
                 job.update(state="error", reason="AI 审核超时")
@@ -161,7 +187,7 @@ class ActionReview:
             decision = job["result"]
             # An approval expires and must also remain near the price reviewed.
             if (
-                now - job.get("completed_at", 0) > 30
+                now - job.get("completed_at", 0) > interval
                 or not quote
                 or not -5 <= now - quote.get("timestamp", 0) <= 15
             ):
@@ -171,7 +197,7 @@ class ActionReview:
                 self.jobs.pop(identity, None)
                 return {"state": "pending", "reason": "AI 审核或行情已过期，等待重新审核"}
             reference = job["reference"]
-            if reference and abs(quote["mid"] / reference - 1) > 0.003:
+            if reference and abs(quote["mid"] / reference - 1) > prefs["ai_reaudit_threshold_pct"] / 100:
                 if protective:
                     self.audit_fallback(identity, job)
                     return {"state": "fallback", "ratio": ratio, "opportunity": opportunity}
@@ -298,7 +324,7 @@ class ActionReview:
             not job
             or job.get("state") != "ready"
             or job.get("result", {}).get("decision") == "reject"
-            or time.time() - job.get("completed_at", 0) > 30
+            or time.time() - job.get("completed_at", 0) > prefs["evaluation_interval"]
             or job["guard"] != actual
         ):
             raise ValueError("AI 审核后账户、仓位或配置已变化，等待重新审核")

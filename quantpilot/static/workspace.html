@@ -77,7 +77,7 @@
           </div>
           <a href="/legacy" class="legacy">旧版模拟账本 ↗</a
           ><button id="logout" class="text-button">退出登录</button
-          ><small>QUANTPILOT 0.7</small>
+          ><small>QUANTPILOT 0.8</small>
         </div>
       </aside>
       <div class="main">
@@ -282,7 +282,7 @@
                       <th>方向 / 数量</th>
                       <th>开仓均价</th>
                       <th>浮动盈亏</th>
-                      <th>止损 / 强平价</th>
+                      <th>当前计划点位</th>
                       <th>操作</th>
                     </tr>
                   </thead>
@@ -546,6 +546,36 @@
                     ><input type="checkbox" name="actionReview" />每次交易前 AI
                     审核（独立开关）</label
                   >
+                  <div class="review-controls">
+                    <label
+                      >机会评估 / 交易前审核周期（秒）<input
+                        name="evaluationInterval"
+                        type="number"
+                        min="10"
+                        max="3600"
+                        step="1"
+                        required
+                        value="30"
+                      /><small
+                        >10–3600
+                        秒，共用一个周期；仅审核已启用账户交易对的待执行动作。网络耗时可能延长间隔。</small
+                      ></label
+                    >
+                    <label
+                      >价格变动重审阈值（%）<input
+                        name="reauditThreshold"
+                        type="number"
+                        min="0.01"
+                        max="10"
+                        step="0.01"
+                        required
+                        value="0.3"
+                      /><small
+                        >相对审核时价格的绝对变动。例如 0.3 表示
+                        0.3%，超过后旧结果失效，在下一审核周期重审；保护退出不等待周期。</small
+                      ></label
+                    >
+                  </div>
                   <p class="fine">
                     开仓、加仓和主动减仓须先获 AI
                     认可；可调整入场、止损和止盈点位。AI
@@ -1020,6 +1050,30 @@
                     name="sound_enabled"
                   />启用网页提示音</label
                 >
+                <div class="form-grid sound-controls">
+                  <label
+                    >提示音<select name="sound_tone">
+                      <option value="chime">清亮和弦</option>
+                      <option value="bell">铃声</option>
+                      <option value="pulse">节奏提示</option>
+                      <option value="alert">醒目提醒</option>
+                    </select></label
+                  >
+                  <label
+                    >提示音音量 <output id="soundVolumeValue">75%</output
+                    ><input
+                      name="sound_volume"
+                      aria-label="提示音音量"
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="1"
+                      value="75"
+                    /><small
+                      >0 为静音，100 为最大；也受设备音量及浏览器限制。</small
+                    ></label
+                  >
+                </div>
                 <div id="notificationChannels" class="notification-grid"></div>
                 <div class="form-actions">
                   <button class="primary">保存提醒设置</button

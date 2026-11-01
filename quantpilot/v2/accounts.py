@@ -9,7 +9,7 @@ import time
 from ..market import decimal as D
 from .logic import check_version
 from .margin import estimates, mode
-from .models import PROFILES, policy_matches
+from .models import PROFILES, pair_enabled, policy_matches
 from .notifications import trade_event
 from .rules import effective
 
@@ -253,6 +253,31 @@ class PaperBroker:
 
     def enter(self, account, opportunity, quotes, instruments, profile, adding=False):
         now, aid, key = time.time(), account["id"], opportunity["instrument_id"]
+        if not pair_enabled(account, key):
+            raise ValueError("交易对未在此账户启用")
+        if self.action_review and self.store.get("v2_preferences")["ai_action_enabled"]:
+            with self.store.connect() as db:
+                book = self.store.read(db, "v2_ledgers")[aid]
+                old = book["positions"].get(key)
+                n = old["adds"] + 1 if adding and old else 0
+                identity = hashlib.sha256(
+                    f"{aid}:{book['generation']}:{opportunity['id']}:{n}".encode()
+                ).hexdigest()
+                if db.execute("SELECT 1 FROM v2_orders WHERE id=?", (identity,)).fetchone():
+                    return {"status": "duplicate"}
+                check_version(self.store, db, opportunity, old)
+            # Reject ineligible sizing before spending an AI request; recheck after approval.
+            size_order(
+                account,
+                book,
+                opportunity,
+                quotes,
+                instruments,
+                profile,
+                now,
+                adding,
+                self.store.get("v2_preferences")["min_score"],
+            )
         if self.action_review:
             verdict = self.action_review.inspect(
                 aid, key, "add" if adding else "open", quotes.get(key), opportunity
@@ -480,12 +505,19 @@ class PaperBroker:
                 )
                 or (
                     parameters["price_reduce_enabled"]
+                    and not account.get("position_review_enabled")
                     and (price - D(p["entry"])) * sign
                     <= -abs(D(p["entry"]) - D(p["stop"])) * D(parameters["reduce_trigger_r"])
                 )
                 or opportunity.get("ai", {}).get("action") == "reduce"
             ) and not p["risk_reduced"]:
-                self.close(aid, key, q, parameters["risk_reduce_ratio"], "risk_reduce")
+                self.close(
+                    aid,
+                    key,
+                    q,
+                    opportunity.get("ai", {}).get("reduce_ratio", parameters["risk_reduce_ratio"]),
+                    "risk_reduce",
+                )
             ai = opportunity.get("ai", {})
             if (
                 ai.get("intervention_enabled")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from typing import Literal
 
 import httpx
 from pydantic import Field, SecretStr
@@ -35,6 +36,8 @@ class Channels(Model):
 class NotificationSettings(Model):
     telegram_enabled: bool = False
     sound_enabled: bool = False
+    sound_tone: Literal["chime", "bell", "pulse", "alert"] = "chime"
+    sound_volume: int = Field(default=75, ge=0, le=100, strict=True)
     telegram: Channels = Field(default_factory=Channels)
     sound: Channels = Field(default_factory=Channels)
 
@@ -110,7 +113,9 @@ class Notifications:
             db.execute("UPDATE notification_events SET delivery='unknown' WHERE delivery='sending'")
 
     def state(self, after=None):
-        settings = self.store.get("v2_notifications_settings")
+        settings = NotificationSettings.model_validate(
+            self.store.get("v2_notifications_settings")
+        ).model_dump()
         with self.store.connect() as db:
             latest = db.execute("SELECT COALESCE(MAX(seq),0) FROM notification_events").fetchone()[0]
             rows = (
@@ -276,3 +281,35 @@ class Notifications:
                     self.store.record("notification_delivery_error", {"reason": "delivery_failed"})
 
         threading.Thread(target=loop, name="notifications", daemon=True).start()
+
+
+def opportunity_message(op):
+    p = op.get("plan") or {}
+
+    def point(v):
+        return f"{float(v):,.8f}".rstrip("0").rstrip(".") if v is not None else "未计划"
+
+    targets = p.get("targets", [])
+    lines = [
+        "QuantPilot · 有效机会（非成交）",
+        f"{op['exchange'].upper()} · {op['symbol']}",
+        f"方向：{'做多' if op['direction'] == 'long' else '做空'} · {op['score']} / 100",
+        f"开仓区间：{point(p.get('entry_low'))} — {point(p.get('entry_high'))}",
+        f"止损：{point(p.get('stop'))}",
+    ]
+    for index, t in enumerate(targets, 1):
+        lines.append(
+            f"止盈 {index}："
+            + (f"{point(t['price'])} · 平仓 {t['ratio'] * 100:g}%" if t.get("enabled", True) else "未计划")
+        )
+    params = op.get("parameters", {})
+    lines += [
+        "加仓观察：" + point(p.get("add_at") if params.get("add_enabled", True) else None),
+        "减仓观察："
+        + point(p.get("reduce_at"))
+        + ("" if params.get("price_reduce_enabled", False) else "（自动按价减仓未启用）"),
+        f"收益 / 风险：{p.get('rr', '—')} : 1",
+        "有效至：" + time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(op["expires_at"])),
+        "观察点位不代表已下单；实际执行须通过账户授权、AI 开关和风控。",
+    ]
+    return "\n".join(lines)

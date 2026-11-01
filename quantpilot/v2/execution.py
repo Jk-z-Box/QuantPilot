@@ -83,7 +83,7 @@ class ExchangeBroker:
                 "cross_margin",
             )
             ready = (
-                cert["version"] == "0.7.0"
+                cert["version"] == "0.8.0"
                 and cert["exchange"] == account["exchange"]
                 and cert["credential_fingerprint"] == fingerprint
                 and all(cert["checks"].get(k) is True for k in required)
@@ -202,8 +202,30 @@ class ExchangeBroker:
                 trigger = D(existing["entry"]) + (D(existing["entry"]) - D(existing["stop"])) * D(
                     effective(existing.get("parameters"))["add_trigger_r"]
                 )
+                if opportunity.get("position_add_at") is not None:
+                    trigger = D(opportunity["position_add_at"])
                 if (D(quotes[key]["mid"]) - trigger) * sign < 0:
                     raise ValueError("未到加仓观察价")
+            identity = (
+                "qp"
+                + hashlib.sha256(
+                    f"{aid}:{opportunity['id']}:{existing['adds'] + 1 if adding else 0}".encode()
+                ).hexdigest()[:24]
+            )
+            with self.store.connect() as db:
+                if db.execute("SELECT 1 FROM v2_orders WHERE id=?", (identity,)).fetchone():
+                    return {"status": "duplicate_or_pending"}
+            size_order(
+                account,
+                book,
+                opportunity,
+                quotes,
+                instruments,
+                profile,
+                time.time(),
+                adding,
+                self.store.get("v2_preferences")["min_score"],
+            )
             if getattr(self, "action_review", None):
                 verdict = self.action_review.inspect(
                     aid, key, "add" if adding else "open", quotes.get(key), opportunity
@@ -698,13 +720,16 @@ class ExchangeBroker:
                     )
                     or (
                         parameters["price_reduce_enabled"]
+                        and not account.get("position_review_enabled")
                         and (price - D(p["entry"])) * sign
                         <= -abs(D(p["entry"]) - D(p["stop"])) * D(parameters["reduce_trigger_r"])
                     )
                     or op.get("ai", {}).get("action") == "reduce"
                 ) and not p["risk_reduced"]
                 if close or reduce:
-                    exit_ratio = 1 if close else parameters["risk_reduce_ratio"]
+                    exit_ratio = (
+                        1 if close else op.get("ai", {}).get("reduce_ratio", parameters["risk_reduce_ratio"])
+                    )
                     if getattr(self, "action_review", None):
                         reason = (
                             "protection_missing"

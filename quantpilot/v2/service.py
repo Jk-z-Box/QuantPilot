@@ -20,8 +20,9 @@ from .history import History
 from .limits import contract_limits
 from .logic import LogicEngine
 from .market import FuturesMarket
-from .models import Account, Preferences, defaults, policy_matches, signal_policy
-from .notifications import Notifications, emit
+from .models import Account, Preferences, defaults, pair_enabled, policy_matches, signal_policy
+from .notifications import Notifications, emit, opportunity_message
+from .position_review import PositionReviews
 from .research import ResearchEngine
 from .rules import effective
 from .signals import evaluate, required_bars
@@ -76,6 +77,7 @@ class Workspace:
                     sizing.setdefault("margin_mode", "isolated")
                 if account["kind"] != "paper":
                     account["capital"] = None
+            accounts = {aid: Account.model_validate(a).model_dump() for aid, a in accounts.items()}
             self.store.write(db, "v2_accounts", accounts)
             self.store.write(db, "v2_sizing_migration", migrated)
         self.chatgpt = ChatGPTConnection(vault)
@@ -84,6 +86,7 @@ class Workspace:
         self.logic = LogicEngine(self)
         self.notifications = Notifications(self)
         self.history = History(self)
+        self.position_reviews = PositionReviews(self)
         self.action_review = ActionReview(self)
         self.paper.action_review = self.action_review
         self.exchange.action_review = self.action_review
@@ -120,6 +123,11 @@ class Workspace:
         return result
 
     def auth_changed(self):
+        with self.store.transaction() as db:
+            accounts = self.store.read(db, "v2_accounts")
+            for account in accounts.values():
+                account["position_review_enabled"] = False
+            self.store.write(db, "v2_accounts", accounts)
         if hasattr(self, "action_review"):
             self.action_review.invalidate()
         if hasattr(self, "logic"):
@@ -402,6 +410,8 @@ class Workspace:
                     "ai_model",
                     "ai_intervene",
                     "ai_action_enabled",
+                    "evaluation_interval",
+                    "ai_reaudit_threshold_pct",
                     "min_score",
                     "ai_data_enabled",
                 )
@@ -508,6 +518,8 @@ class Workspace:
                         "ai_model",
                         "ai_intervene",
                         "ai_action_enabled",
+                        "evaluation_interval",
+                        "ai_reaudit_threshold_pct",
                         "ai_data_enabled",
                     )
                 ):
@@ -526,13 +538,13 @@ class Workspace:
                             db,
                             "opportunity:" + op["id"],
                             "opportunity",
-                            f"QuantPilot · 有效机会\n{op['exchange']} {op['symbol']}\n方向：{op['direction']} · {op['score']} 分\n有效至：{time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(op['expires_at']))}\n账户仍需独立通过授权和风险检查。",
+                            opportunity_message(op),
                         )
 
     def tick(self):
         items = self.store.get("v2_watchlist")
         prefs = self.store.get("v2_preferences")
-        do_analysis = time.time() - self.last_evaluation > 30
+        do_analysis = time.time() - self.last_evaluation >= prefs["evaluation_interval"]
         books = self.store.get("v2_ledgers")
         held = {k for b in books.values() for k in b["positions"]}
         held.update(k for positions in self.store.get("v2_managed").values() for k in positions)
@@ -565,6 +577,7 @@ class Workspace:
             for future in futures:
                 future.result()
         self.execute()
+        self.position_reviews.scheduled()
 
     def review_ai(self, prefs=None):
         prefs = prefs or self.store.get("v2_preferences")
@@ -657,14 +670,19 @@ class Workspace:
             aid = account["id"]
             try:
                 if account["kind"] == "paper":
-                    self.paper.protect(account, quotes, ops)
+                    self.paper.protect(
+                        account, quotes, self.position_reviews.opportunities(account, ops, quotes)
+                    )
                 else:
-                    self.exchange.manage(account, quotes, ops, items)
+                    self.exchange.manage(
+                        account, quotes, self.position_reviews.opportunities(account, ops, quotes), items
+                    )
                 if not account["auto"] or prefs["halted"]:
                     continue
                 for key, op in ops.items():
                     if (
-                        key not in items
+                        not pair_enabled(account, key)
+                        or key not in items
                         or not items[key]["enabled"]
                         or not op.get("valid")
                         or op["profile"] != prefs["profile"]
@@ -683,15 +701,19 @@ class Workspace:
                             adding = bool(position)
                             if adding:
                                 sign = 1 if position["side"] == "long" else -1
-                                trigger = (
-                                    float(position["entry"])
-                                    + (float(position["entry"]) - float(position["stop"]))
-                                    * effective(position.get("parameters"))["add_trigger_r"]
-                                )
+                                trigger = self.position_reviews.points(account, key, position)["add_at"]
+                                if trigger is None:
+                                    continue
                                 if (quotes[key]["mid"] - trigger) * sign < 0:
                                     continue
                             result = self.paper.enter(account, op, quotes, items, prefs["profile"], adding)
                         else:
+                            held = self.position_reviews.held(account).get(key)
+                            if held:
+                                trigger = self.position_reviews.points(account, key, held)["add_at"]
+                                if trigger is None:
+                                    continue
+                                op = {**op, "position_add_at": trigger}
                             result = self.exchange.enter(account, op, quotes, items, prefs["profile"])
                         if result.get("status") in ("duplicate", "duplicate_or_pending"):
                             self.errors[aid] = (
@@ -725,6 +747,28 @@ class Workspace:
             summary = (
                 valuation(books[a["id"]], quotes, now) if a["kind"] == "paper" else external.get(a["id"], {})
             )
+            for position in summary.get("positions", []):
+                key = position.get("instrument_id") or next(
+                    (
+                        i["id"]
+                        for i in self.store.get("v2_watchlist")
+                        if i["exchange"] == a["exchange"] and i["symbol"] == position.get("symbol")
+                    ),
+                    None,
+                )
+                held = self.position_reviews.held(a).get(key)
+                position["instrument_id"] = key
+                position["planned_points"] = (
+                    self.position_reviews.points(a, key, held)
+                    if held
+                    else {
+                        "stop": None,
+                        "targets": [],
+                        "add_at": None,
+                        "reduce_at": None,
+                        "review_status": "未计划",
+                    }
+                )
             accounts.append(
                 {
                     **a,
@@ -732,6 +776,7 @@ class Workspace:
                     "execution": self.exchange.availability(a),
                     "credential_saved": bool(self.vault.get("v2:account:" + a["id"])),
                     "last_error": self.errors.get(a["id"]),
+                    "position_review": self.position_reviews.state(a),
                 }
             )
         with self.store.connect() as db:
@@ -740,7 +785,7 @@ class Workspace:
                 for r in db.execute("SELECT * FROM v2_orders ORDER BY created DESC LIMIT 100")
             ]
         return {
-            "version": "0.7.0",
+            "version": "0.8.0",
             "now": now,
             "demo": self.market.demo,
             "watchlist": self.store.get("v2_watchlist"),
@@ -810,6 +855,7 @@ class Workspace:
     def stop(self):
         self.stop_event.set()
         self.action_review.pool.shutdown(wait=False, cancel_futures=True)
+        self.position_reviews.pool.shutdown(wait=False, cancel_futures=True)
         self.history.pool.shutdown(wait=False, cancel_futures=True)
         if self.research.thread:
             self.research.thread.join(timeout=3)

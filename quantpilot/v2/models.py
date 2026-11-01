@@ -74,6 +74,8 @@ class Preferences(Model):
     ai_interval: int = Field(default=300, ge=60, le=3600)
     ai_intervene: bool = False
     ai_action_enabled: bool = False
+    evaluation_interval: int = Field(default=30, ge=10, le=3600, strict=True)
+    ai_reaudit_threshold_pct: float = Field(default=0.3, ge=0.01, le=10)
     ai_data_enabled: bool = False
     ai_data_interval: int = Field(default=1800, ge=900, le=86400)
     halted: bool = False
@@ -88,6 +90,8 @@ POLICY_KEYS = (
     "ai_intervene",
     "ai_data_enabled",
     "ai_action_enabled",
+    "evaluation_interval",
+    "ai_reaudit_threshold_pct",
 )
 
 
@@ -125,6 +129,8 @@ class Account(Model):
     exchange: Literal["binance", "okx", "gate"] = "binance"
     capital: float | None = Field(default=None, ge=100, le=100000000)
     auto: bool = False
+    position_review_enabled: bool = False
+    position_review_interval: int = Field(default=300, ge=60, le=86400, strict=True)
     allowed: list[str] = Field(default_factory=list, max_length=30)
     sizing: list[Sizing] = Field(default_factory=list, max_length=30)
 
@@ -180,3 +186,9 @@ class Evidence(Model):
         if not re.match(r"^https://[^\s/@]+(?:/|$)", self.url) or self.expires_at <= self.published_at:
             raise ValueError("需要 HTTPS 来源和正确时间范围")
         return self
+
+
+def pair_enabled(account, key):
+    return any(s["instrument_id"] == key and s.get("quantity") for s in account.get("sizing", [])) and (
+        account["kind"] == "paper" or key in account.get("allowed", [])
+    )

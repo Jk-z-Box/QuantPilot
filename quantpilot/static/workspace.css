@@ -2194,3 +2194,85 @@ dialog[open] {
     padding-bottom: calc(100px + env(safe-area-inset-bottom));
   }
 }
+
+.review-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 12px 0;
+  padding: 16px;
+  background: #f3f8f5;
+  border-radius: 10px;
+}
+.review-controls small {
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.6;
+  color: #678174;
+}
+.position-review-settings {
+  border: 1px solid #dce6e0;
+  border-radius: 10px;
+  padding: 16px;
+  margin: 20px 0;
+}
+.position-review-settings legend {
+  font-weight: 600;
+  padding: 0 8px;
+}
+.position-points {
+  min-width: 230px;
+  line-height: 1.9;
+  white-space: normal;
+}
+.sound-controls {
+  max-width: 680px;
+  margin: 14px 0;
+}
+.sound-controls input[type="range"] {
+  width: 100%;
+  padding: 0;
+  accent-color: #138472;
+}
+@media (max-width: 760px) {
+  .review-controls {
+    grid-template-columns: 1fr;
+  }
+  .positions-card .table-scroll {
+    overflow: visible;
+  }
+  .positions-card table,
+  .positions-card tbody {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+  .positions-card thead {
+    display: none;
+  }
+  .positions-card tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    border-bottom: 1px solid #dce6e0;
+    padding: 12px 0;
+  }
+  .positions-card td {
+    display: block;
+    min-width: 0;
+    white-space: normal;
+    padding: 10px;
+    border: 0;
+    overflow-wrap: anywhere;
+  }
+  .positions-card td:before {
+    content: attr(data-label);
+    display: block;
+    color: #789084;
+    font-size: 11px;
+    margin-bottom: 5px;
+  }
+  .positions-card td.position-points,
+  .positions-card td.empty {
+    grid-column: 1/-1;
+  }
+}

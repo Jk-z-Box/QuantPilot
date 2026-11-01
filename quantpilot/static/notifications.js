@@ -28,6 +28,9 @@ function renderNotifications() {
     const f = $("notificationForm");
     f.telegram_enabled.checked = n.settings.telegram_enabled;
     f.sound_enabled.checked = n.settings.sound_enabled;
+    f.sound_tone.value = n.settings.sound_tone || "chime";
+    f.sound_volume.value = n.settings.sound_volume ?? 75;
+    $("soundVolumeValue").textContent = f.sound_volume.value + "%";
     for (const k in notificationCategories) {
       f.elements.namedItem("telegram_" + k).checked = n.settings.telegram[k];
       f.elements.namedItem("sound_" + k).checked = n.settings.sound[k];
@@ -42,20 +45,45 @@ function renderNotifications() {
       : "请点击「启用 / 测试声音」；手机锁屏或关闭页面后，声音可能无法播放。";
   if (notificationCursor === null) notificationCursor = n.cursor;
 }
-function playNotice() {
+$("notificationForm").sound_volume.addEventListener("input", (e) => {
+  $("soundVolumeValue").textContent = e.target.value + "%";
+});
+function playNotice(settings = state?.notifications?.settings || {}) {
   if (!soundContext || soundContext.state !== "running") return;
+  const volume =
+    Math.min(100, Math.max(0, Number(settings.sound_volume ?? 75))) / 100;
+  if (!volume) return;
+  const tones = {
+    chime: [784, 988, 1175],
+    bell: [1047, 784, 1047],
+    pulse: [740, 740, 988, 988],
+    alert: [880, 1320, 880, 1320],
+  };
+  const selectedTone = settings.sound_tone || "chime";
+  const notes = tones[selectedTone] || tones.chime;
+  const compressor = soundContext.createDynamicsCompressor();
+  compressor.connect(soundContext.destination);
   const t = soundContext.currentTime;
-  [660, 880].forEach((hz, i) => {
+  notes.forEach((hz, i) => {
     const osc = soundContext.createOscillator(),
       gain = soundContext.createGain();
+    osc.type =
+      selectedTone === "bell" || selectedTone === "alert" ? "triangle" : "sine";
     osc.frequency.value = hz;
-    gain.gain.setValueAtTime(0, t + i * 0.18);
-    gain.gain.linearRampToValueAtTime(0.12, t + i * 0.18 + 0.015);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.18 + 0.15);
+    const start = t + i * 0.28,
+      duration = selectedTone === "bell" ? 0.65 : 0.26;
+    gain.gain.setValueAtTime(0, start);
+    gain.gain.linearRampToValueAtTime(0.65 * volume, start + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.001, start + duration);
     osc.connect(gain);
-    gain.connect(soundContext.destination);
-    osc.start(t + i * 0.18);
-    osc.stop(t + i * 0.18 + 0.16);
+    gain.connect(compressor);
+    osc.start(start);
+    osc.stop(start + duration + 0.02);
+    osc.onended = () => {
+      osc.disconnect();
+      gain.disconnect();
+      if (i === notes.length - 1) compressor.disconnect();
+    };
   });
 }
 $("soundTest").onclick = () =>
@@ -64,7 +92,10 @@ $("soundTest").onclick = () =>
     if (!Audio) throw Error("此浏览器不支持网页声音");
     soundContext ||= new Audio();
     await soundContext.resume();
-    playNotice();
+    playNotice({
+      sound_tone: $("notificationForm").sound_tone.value,
+      sound_volume: Number($("notificationForm").sound_volume.value),
+    });
     renderNotifications();
   });
 $("notificationForm").onsubmit = (e) => {
@@ -74,6 +105,8 @@ $("notificationForm").onsubmit = (e) => {
       body = {
         telegram_enabled: f.telegram_enabled.checked,
         sound_enabled: f.sound_enabled.checked,
+        sound_tone: f.sound_tone.value,
+        sound_volume: Number(f.sound_volume.value),
         telegram: {},
         sound: {},
       };
@@ -131,7 +164,7 @@ async function pollNotifications() {
       n.settings.sound_enabled &&
       fresh.some((e) => n.settings.sound[e.category])
     )
-      playNotice();
+      playNotice(n.settings);
     if (fresh.length)
       toast(fresh.at(-1).message.split("\n").slice(0, 3).join(" · "));
   } catch {

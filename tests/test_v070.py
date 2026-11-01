@@ -180,6 +180,7 @@ def test_ai_timeout_blocks_entry_and_allows_protection(workspace, account, oppor
     callbacks, _ = enable_actions(workspace, monkeypatch)
     gate = workspace.action_review
     for action in ("open", "add", "stop_loss", "take_profit", "liquidation_distance"):
+        gate.last_requests.clear()  # Each case independently tests timeout, not the shared cadence.
         assert gate.inspect(account["id"], "btc", action, quote, opportunity)["state"] == "pending"
         for job in gate.jobs.values():
             job["deadline"] = time.time() - 1
