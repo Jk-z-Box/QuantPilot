@@ -127,6 +127,8 @@ class Workspace:
             accounts = self.store.read(db, "v2_accounts")
             for account in accounts.values():
                 account["position_review_enabled"] = False
+                account["profit_trailing_enabled"] = False
+                account["ai_take_profit_enabled"] = False
             self.store.write(db, "v2_accounts", accounts)
         if hasattr(self, "action_review"):
             self.action_review.invalidate()
@@ -782,10 +784,19 @@ class Workspace:
         with self.store.connect() as db:
             orders = [
                 {**dict(r), "result": json.loads(r["result"])}
-                for r in db.execute("SELECT * FROM v2_orders ORDER BY created DESC LIMIT 100")
+                for r in db.execute(
+                    "SELECT * FROM v2_orders WHERE created>=? OR state IN ('sending','unknown','protected') ORDER BY created DESC LIMIT 100",
+                    (self.logic.history_scope(db)["started_at"],),
+                )
+            ]
+            changes = [
+                {**dict(r), "changes": json.loads(r["changes"])}
+                for r in db.execute("SELECT * FROM v2_position_changes ORDER BY id DESC LIMIT 30")
             ]
         return {
-            "version": "0.8.0",
+            "history_scope": self.logic.history_scope(),
+            "position_changes": changes,
+            "version": "0.9.0",
             "now": now,
             "demo": self.market.demo,
             "watchlist": self.store.get("v2_watchlist"),

@@ -11,6 +11,7 @@ from .logic import check_version
 from .margin import estimates, mode
 from .models import PROFILES, pair_enabled, policy_matches
 from .notifications import trade_event
+from .position_changes import levels, position_guard, record_changes
 from .rules import effective
 
 FEE = D(".0005")
@@ -316,6 +317,8 @@ class PaperBroker:
                 total = qty + D(old["qty"])
                 old["entry"] = str((D(old["entry"]) * D(old["qty"]) + price * qty) / total)
                 old["qty"] = str(total)
+                if "target_basis_qty" in old:
+                    old["target_basis_qty"] = str(D(old["target_basis_qty"]) + qty)
                 old["original_qty"] = str(D(old["original_qty"]) + qty)
                 old["margin"] = str(D(old["margin"]) + qty * price / sizing["leverage"])
                 old["adds"] += 1
@@ -380,7 +383,11 @@ class PaperBroker:
             p = book["positions"].get(key)
             if not p or (target is not None and target in p["tp_done"]):
                 return {"status": "duplicate"}
-            qty = min(D(p["qty"]), D(p["original_qty"] if target is not None else p["qty"]) * D(ratio))
+            qty = min(
+                D(p["qty"]),
+                D(p.get("target_basis_qty", p["original_qty"]) if target is not None else p["qty"])
+                * D(ratio),
+            )
             sign = 1 if p["side"] == "long" else -1
             price = D(quote["bid"] if sign == 1 else quote["ask"]) * (1 - SLIP if sign == 1 else 1 + SLIP)
             fee = qty * price * FEE
@@ -519,37 +526,64 @@ class PaperBroker:
                     "risk_reduce",
                 )
             ai = opportunity.get("ai", {})
-            if (
-                ai.get("intervention_enabled")
-                and ai.get("action") == "tighten"
-                and ai.get("stop") is not None
-            ):
-                target = D(ai["stop"])
-                if (target - D(p["stop"])) * sign > 0 and (price - target) * sign > 0:
-                    with self.store.transaction() as db:
-                        books = self.store.read(db, "v2_ledgers")
-                        current = books[aid]["positions"].get(key)
-                        if current and (target - D(current["stop"])) * sign > 0:
+            if ai.get("intervention_enabled"):
+                with self.store.transaction() as db:
+                    books = self.store.read(db, "v2_ledgers")
+                    current = books[aid]["positions"].get(key)
+                    if not current or (
+                        ai.get("position_guard") is not None
+                        and position_guard(current) != ai["position_guard"]
+                    ):
+                        continue
+                    before_levels = levels(current)
+                    if ai.get("action") == "tighten" and ai.get("stop") is not None:
+                        target = D(ai["stop"])
+                        if (target - D(current["stop"])) * sign > 0 and (price - target) * sign > 0:
                             current["stop"] = str(target)
-                            self.store.write(db, "v2_ledgers", books)
                             self.store.audit(
                                 db,
                                 "v2_stop_tightened",
                                 {"account_id": aid, "instrument_id": key, "stop": str(target)},
                             )
-            if ai.get("intervention_enabled") and ai.get("targets") and not p["tp_done"]:
-                targets = ai["targets"]
-                if all(
-                    (D(t["price"]) - D(p["entry"])) * sign > 0
-                    and (D(old["price"]) - D(t["price"])) * sign >= 0
-                    for t, old in zip(targets, p["targets"], strict=True)
-                ):
-                    with self.store.transaction() as db:
-                        books = self.store.read(db, "v2_ledgers")
-                        current = books[aid]["positions"].get(key)
-                        if current and not current["tp_done"]:
-                            current["targets"] = targets
-                            self.store.write(db, "v2_ledgers", books)
+                    targets = ai.get("targets")
+                    if (
+                        targets
+                        and len(targets) == len(current["targets"])
+                        and all(
+                            (
+                                t == old
+                                if i in current["tp_done"]
+                                else (
+                                    (D(t["price"]) - D(current["entry"])) * sign > 0
+                                    and (D(old["price"]) - D(t["price"])) * sign >= 0
+                                    and (not t.get("enabled", True) or (D(t["price"]) - price) * sign > 0)
+                                )
+                            )
+                            for i, (t, old) in enumerate(zip(targets, current["targets"], strict=True))
+                        )
+                    ):
+                        allocation_changed = any(
+                            (t.get("enabled", True), t["ratio"]) != (old.get("enabled", True), old["ratio"])
+                            for t, old in zip(targets, current["targets"], strict=True)
+                        )
+                        if not allocation_changed or not current["tp_done"]:
+                            current["targets"] = copy.deepcopy(targets)
+                            if allocation_changed or (
+                                ai.get("take_profit_mode", "keep") != "keep" and not current["tp_done"]
+                            ):
+                                current["target_basis_qty"] = current["qty"]
+                    self.store.write(db, "v2_ledgers", books)
+                    if ai.get("position_review"):
+                        record_changes(
+                            self.store,
+                            db,
+                            aid,
+                            key,
+                            before_levels,
+                            levels(current),
+                            ai["reason"],
+                            ai["reviewed_at"],
+                        )
             # Funding simulation is explicitly an 8-hour approximation, not an exchange settlement replica.
             boundary = int(time.time() // 28800) * 28800
             if q.get("funding_rate") is not None and boundary > p["funding_at"]:

@@ -110,7 +110,7 @@ async function loadManagement(force = false) {
       $("logicCreated").textContent =
         `${sources[fresh.current.source]} · ${time(fresh.current.created_at)}`;
       $("logicStatus").textContent =
-        `${fresh.running ? "正在复盘，完成后自动刷新" : fresh.status}${fresh.next_review_at ? " · 下次检查：" + time(fresh.next_review_at) : ""}`;
+        `${fresh.running ? "正在复盘，完成后自动刷新" : fresh.status}${fresh.history_scope?.generation ? " · 样本起点：" + time(fresh.history_scope.started_at) : ""}${fresh.next_review_at ? " · 下次检查：" + time(fresh.next_review_at) : ""}`;
       $("reviewLogic").disabled = fresh.running;
       const m = fresh.metrics,
         latest = [...fresh.reviews]

@@ -2276,3 +2276,55 @@ dialog[open] {
     grid-column: 1/-1;
   }
 }
+
+.position-review-options {
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.position-review-options .check {
+  margin-top: 16px;
+}
+.position-change {
+  border-top: 1px solid var(--line);
+  padding: 18px 0;
+}
+.position-change .card-head {
+  margin-bottom: 6px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.position-change time {
+  font-size: 12px;
+  color: var(--muted);
+}
+.position-change-row {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr);
+  gap: 12px;
+  padding: 8px 0;
+}
+.position-change-row del {
+  color: var(--muted);
+  display: block;
+}
+.position-change-row strong {
+  display: block;
+  color: var(--green);
+  overflow-wrap: anywhere;
+}
+.position-change-reason {
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .position-changes-card > .card-head,
+  .trade-history-card > .card-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .position-change-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}

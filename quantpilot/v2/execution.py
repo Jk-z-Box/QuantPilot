@@ -15,6 +15,7 @@ from .logic import check_version
 from .margin import mode
 from .models import policy_matches
 from .notifications import trade_event
+from .position_changes import levels, record_changes
 from .rules import effective
 
 
@@ -83,7 +84,7 @@ class ExchangeBroker:
                 "cross_margin",
             )
             ready = (
-                cert["version"] == "0.8.0"
+                cert["version"] == "0.9.0"
                 and cert["exchange"] == account["exchange"]
                 and cert["credential_fingerprint"] == fingerprint
                 and all(cert["checks"].get(k) is True for k in required)
@@ -834,10 +835,23 @@ class ExchangeBroker:
                                 raise ValueError("旧止损单清理未确认")
                         with self.store.transaction() as db:
                             m = self.store.read(db, "v2_managed")
+                            before_levels = levels(m[aid][key])
                             m[aid][key]["stop"] = str(target)
                             for leg in m[aid][key]["legs"]:
                                 leg["stop_id"] = new["id"]
                             self.store.write(db, "v2_managed", m)
+                            ai = op.get("ai", {})
+                            if ai.get("position_review"):
+                                record_changes(
+                                    self.store,
+                                    db,
+                                    aid,
+                                    key,
+                                    before_levels,
+                                    levels(m[aid][key]),
+                                    ai["reason"],
+                                    ai["reviewed_at"],
+                                )
                     except Exception:
                         self.freeze(aid, "止损调整结果待核对，账户暂停")
 
@@ -859,10 +873,11 @@ class ExchangeBroker:
                 ):
                     try:
                         new_ids, remaining = [], qty
-                        for index, target in enumerate(ai_targets):
+                        active_targets = [t for t in ai_targets if t.get("enabled", True)]
+                        for index, target in enumerate(active_targets):
                             amount = (
                                 D(client.amount_to_precision(p["symbol"], str(qty * D(target["ratio"]))))
-                                if index == 0
+                                if index < len(active_targets) - 1
                                 else remaining
                             )
                             if amount <= 0:
@@ -886,10 +901,23 @@ class ExchangeBroker:
                                 raise ValueError("原止盈单未完成清理")
                         with self.store.transaction() as db:
                             m = self.store.read(db, "v2_managed")
+                            before_levels = levels(m[aid][key])
                             m[aid][key]["targets"] = ai_targets
                             for index, leg in enumerate(m[aid][key]["legs"]):
                                 leg["target_ids"] = new_ids if index == 0 else []
                             self.store.write(db, "v2_managed", m)
+                            ai = op.get("ai", {})
+                            if ai.get("position_review"):
+                                record_changes(
+                                    self.store,
+                                    db,
+                                    aid,
+                                    key,
+                                    before_levels,
+                                    levels(m[aid][key]),
+                                    ai["reason"],
+                                    ai["reviewed_at"],
+                                )
                             self.store.audit(
                                 db, "v2_targets_tightened", {"account_id": aid, "instrument_id": key}
                             )

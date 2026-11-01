@@ -77,7 +77,7 @@
           </div>
           <a href="/legacy" class="legacy">旧版模拟账本 ↗</a
           ><button id="logout" class="text-button">退出登录</button
-          ><small>QUANTPILOT 0.8</small>
+          ><small>QUANTPILOT 0.9</small>
         </div>
       </aside>
       <div class="main">
@@ -290,13 +290,26 @@
                 </table>
               </div>
             </article>
+            <article class="card position-changes-card">
+              <div class="card-head">
+                <h2>持仓 AI 调整记录</h2>
+                <span class="muted small"
+                  >最近 30 次实际变化 · 无变化不重复提醒</span
+                >
+              </div>
+              <div id="positionChanges"></div>
+            </article>
           </section>
           <section data-panel="history" hidden>
-            <article class="card">
+            <article class="card trade-history-card">
               <div class="card-head">
                 <h2>交易与执行记录</h2>
+                <button id="resetHistory" class="danger-outline">
+                  清除 / 重置记录
+                </button>
                 <span class="muted small">最近 100 条 · 含未确认状态</span>
               </div>
+              <p id="historyScope" class="notice-box"></p>
               <div class="table-scroll">
                 <table>
                   <thead>

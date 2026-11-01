@@ -143,6 +143,10 @@ class LogicEngine:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS logic_trade_details (id TEXT PRIMARY KEY, detail TEXT NOT NULL)"
             )
+            db.execute("CREATE TABLE IF NOT EXISTS logic_sample_exclusions (trade_id TEXT PRIMARY KEY)")
+            db.execute(
+                "INSERT OR IGNORE INTO kv VALUES ('v2_history_scope', '{\"generation\":0,\"started_at\":0}')"
+            )
             initial = {
                 "current": version(Parameters(), "initial"),
                 "archives": [],
@@ -154,16 +158,45 @@ class LogicEngine:
             }
             db.execute("INSERT OR IGNORE INTO kv VALUES (?,?)", ("v2_logic", json.dumps(initial)))
 
+    def history_scope(self, db=None):
+        return (
+            self.store.read(db, "v2_history_scope") if db is not None else self.store.get("v2_history_scope")
+        )
+
+    def reset_history(self, body):
+        with self.lock, self.store.transaction() as db:
+            scope = self.history_scope(db)
+            if scope["generation"] != body.expected_generation:
+                raise ValueError("记录已被重置，请刷新后再操作")
+            now = time.time()
+            for book in self.store.read(db, "v2_ledgers").values():
+                for p in book["positions"].values():
+                    if p.get("logic_trade_id"):
+                        db.execute(
+                            "INSERT OR IGNORE INTO logic_sample_exclusions VALUES (?)", (p["logic_trade_id"],)
+                        )
+            scope = {"generation": scope["generation"] + 1, "started_at": now}
+            self.store.write(db, "v2_history_scope", scope)
+            data = self.store.read(db, "v2_logic")
+            data.update(last_attempt=0, status="交易记录与复盘样本已重置，等待本轮新开并完整平仓的交易")
+            self.store.write(db, "v2_logic", data)
+            self.store.audit(db, "history_reset", scope)
+        return scope
+
     def current(self):
         return self.store.get("v2_logic")["current"]
 
     def metrics(self, db, current, settings):
         end = time.time()
-        start = max(current["created_at"], end - settings["lookback_days"] * 86400)
+        start = max(
+            current["created_at"],
+            end - settings["lookback_days"] * 86400,
+            self.history_scope(db)["started_at"],
+        )
         prefs = self.store.read(db, "v2_preferences")
         policy = json.dumps({"profile": prefs["profile"], "min_score": prefs["min_score"]}, sort_keys=True)
         rows = db.execute(
-            "SELECT net_pnl FROM logic_trades WHERE version=? AND closed_at>=? AND closed_at<=? AND demo=0 AND policy=? ORDER BY closed_at,id",
+            "SELECT net_pnl FROM logic_trades WHERE version=? AND closed_at>=? AND closed_at<=? AND demo=0 AND policy=? AND id NOT IN (SELECT trade_id FROM logic_sample_exclusions) ORDER BY closed_at,id",
             (current["id"], start, end, policy),
         ).fetchall()
         return calculate_metrics(rows, start, end)
@@ -174,8 +207,11 @@ class LogicEngine:
             policy = evaluation_policy(self.store.read(db, "v2_preferences"))
             data = self.store.read(db, "v2_logic")
             metrics = self.metrics(db, data["current"], data["settings"])
+            scope = self.history_scope(db)
         return {
             **data,
+            "history_scope": scope,
+            "reviews": [r for r in data["reviews"] if r.get("sample_generation", 0) == scope["generation"]],
             "current": {
                 **data["current"],
                 "parameters": Parameters.model_validate(data["current"]["parameters"]).model_dump(),
@@ -210,7 +246,8 @@ class LogicEngine:
             (
                 r
                 for r in reversed(data["reviews"])
-                if r["version"] == expected
+                if r.get("sample_generation", 0) == self.history_scope(db)["generation"]
+                and r["version"] == expected
                 and r.get("score") is not None
                 and r.get("policy") == evaluation_policy(self.store.read(db, "v2_preferences"))
             ),
@@ -337,14 +374,16 @@ class LogicEngine:
                     self.store.write(db, "v2_logic", data)
 
     def run(self):
+        generation = self.history_scope()["generation"]
         try:
             self.review()
         except Exception as exc:
             message = exc.title if isinstance(exc, AIError) else "复盘未完成；当前逻辑保持不变"
             with self.store.transaction() as db:
                 data = self.store.read(db, "v2_logic")
-                data["status"] = message
-                self.store.write(db, "v2_logic", data)
+                if self.history_scope(db)["generation"] == generation:
+                    data["status"] = message
+                    self.store.write(db, "v2_logic", data)
                 self.store.audit(
                     db,
                     "logic_review_failed",
@@ -363,6 +402,7 @@ class LogicEngine:
         enough = metrics["trades"] >= config["minimum_trades"]
         result = {
             "id": secrets.token_hex(12),
+            "sample_generation": snapshot["history_scope"]["generation"],
             "at": time.time(),
             "version": current["id"],
             "metrics": metrics,
@@ -380,7 +420,7 @@ class LogicEngine:
         else:
             with self.store.connect() as db:
                 rows = db.execute(
-                    "SELECT d.detail FROM logic_trades t JOIN logic_trade_details d ON d.id=t.id WHERE t.version=? AND t.closed_at>=? AND t.closed_at<=? AND t.demo=0 AND t.policy=? ORDER BY t.closed_at DESC LIMIT 100",
+                    "SELECT d.detail FROM logic_trades t JOIN logic_trade_details d ON d.id=t.id WHERE t.version=? AND t.closed_at>=? AND t.closed_at<=? AND t.demo=0 AND t.policy=? AND t.id NOT IN (SELECT trade_id FROM logic_sample_exclusions) ORDER BY t.closed_at DESC LIMIT 100",
                     (
                         current["id"],
                         metrics["from_at"],
@@ -445,6 +485,7 @@ class LogicEngine:
             data = self.store.read(db, "v2_logic")
             if (
                 self.workspace.stop_event.is_set()
+                or self.history_scope(db)["generation"] != snapshot["history_scope"]["generation"]
                 or data["current"]["id"] != current["id"]
                 or data["settings"] != config
                 or self.store.read(db, "v2_preferences") != prefs

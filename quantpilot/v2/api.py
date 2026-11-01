@@ -8,7 +8,17 @@ from pydantic import Field, SecretStr
 
 from .ai import list_models
 from .logic import Edit, Import, Restore, ReviewSettings
-from .models import Account, AccountSecrets, Evidence, Instrument, KeyInput, Model, Preferences, Reset
+from .models import (
+    Account,
+    AccountSecrets,
+    Evidence,
+    HistoryReset,
+    Instrument,
+    KeyInput,
+    Model,
+    Preferences,
+    Reset,
+)
 from .notifications import NotificationSettings, TelegramKey
 
 
@@ -50,6 +60,10 @@ def install(app, workspace, session, mutation):
     @app.get("/api/v2/state", dependencies=[Depends(session)])
     def state():
         return workspace.state()
+
+    @app.post("/api/v2/history/reset", dependencies=[Depends(mutation)])
+    def history_reset(body: HistoryReset):
+        return safe(workspace.logic.reset_history, body)
 
     @app.get("/api/v2/notifications", dependencies=[Depends(session)])
     def notifications(after: int | None = None):

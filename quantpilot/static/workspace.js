@@ -147,6 +147,8 @@ function accountPayload(a) {
       "auto",
       "position_review_enabled",
       "position_review_interval",
+      "profit_trailing_enabled",
+      "ai_take_profit_enabled",
       "allowed",
       "sizing",
     ].map((k) => [k, a[k]]),
@@ -675,6 +677,48 @@ function renderAccounts(force = false) {
       .join("") ||
     '<tr><td colspan="6" class="empty">还没有仓位。启用模拟账户后，系统会等待有效机会。</td></tr>';
   bindAccounts();
+  renderPositionChanges();
+}
+function changeValue(key, value) {
+  if (value == null) return "未计划";
+  if (key === "targets")
+    return value
+      .map((t, i) =>
+        t.enabled
+          ? `止盈 ${i + 1}：${price(t.price)} / ${fmt(t.ratio * 100, 0)}%`
+          : `止盈 ${i + 1}：停用`,
+      )
+      .join("；");
+  return price(value);
+}
+function renderPositionChanges() {
+  const rows = state.position_changes || [];
+  $("positionChanges").innerHTML = rows.length
+    ? rows
+        .map((r) => {
+          const account = state.accounts.find((a) => a.id === r.account_id);
+          const item = state.watchlist.find((i) => i.id === r.instrument_id);
+          return `<article class="position-change"><div class="card-head"><strong>${esc(account?.name || state.archived_accounts?.[r.account_id] || "已删除账户")} · ${esc(item?.symbol || r.instrument_id)}</strong><time>${time(r.created)}</time></div><p class="fine">${r.stage === "protection" ? "保护点位已更新" : "加减仓计划已更新"} · 不代表已成交</p>${Object.entries(
+            r.changes,
+          )
+            .map(
+              ([k, v]) =>
+                `<div class="position-change-row"><span>${esc(
+                  {
+                    stop: "止损",
+                    targets: "止盈安排",
+                    target_basis_qty: "止盈比例基准数量",
+                    add_at: "加仓计划",
+                    reduce_at: "减仓计划",
+                  }[k] || k,
+                )}</span><div><del>${esc(changeValue(k, v.before))}</del><strong>→ ${esc(changeValue(k, v.after))}</strong></div></div>`,
+            )
+            .join(
+              "",
+            )}<p class="position-change-reason">${esc(r.reason)}</p></article>`;
+        })
+        .join("")
+    : '<p class="empty">暂无持仓 AI 调整。仅记录已生效的点位或计划变化，原样保留不重复提醒。</p>';
 }
 function bindAccounts() {
   document.querySelectorAll("[data-delete-account]").forEach(
@@ -792,12 +836,20 @@ function editAccount(a) {
       .map((x) => `<option value="${x}">${exchangeName[x]}</option>`)
       .join(
         "",
-      )}</select></label><label id="paperCapital">初始模拟资金 / USDT<input name="capital" type="number" min="100" max="100000000" step="any" value="${a?.capital || 10000}" ${a ? "disabled" : ""}></label></div><p id="accountKindHint" class="notice-box"></p><fieldset class="position-review-settings"><legend>现有仓位 AI 定期评估</legend><label class="check"><input type="checkbox" name="positionReview" ${a?.position_review_enabled ? "checked" : ""}>启用此账户的持仓 AI 评估</label><label>持仓评估间隔（秒）<input type="number" name="positionInterval" min="60" max="86400" step="1" value="${a?.position_review_interval || 300}" required></label><p class="fine">独立于交易前审核，对本平台管理的现有仓位评估止盈、止损和加减仓点位。加仓仍须账户自动交易和该交易对已启用；未落定时不新增加仓计划，既有保护继续。会消耗当前 AI 连接额度。</p></fieldset><h3>逐交易对设置</h3><p class="muted small">仓位填写标的数量，例如 0.01 BTC。杠杆与逐仓 / 全仓独立设置，风险偏好仍控制亏损及总敞口。未配置的品种不会自动开仓。</p><div id="sizingRows"></div><div class="dialog-footer"><button type="button" id="cancelAccount" class="secondary">取消</button><button class="primary">保存账户设置</button></div></form>`,
+      )}</select></label><label id="paperCapital">初始模拟资金 / USDT<input name="capital" type="number" min="100" max="100000000" step="any" value="${a?.capital || 10000}" ${a ? "disabled" : ""}></label></div><p id="accountKindHint" class="notice-box"></p><fieldset class="position-review-settings"><legend>现有仓位 AI 定期评估</legend><label class="check"><input type="checkbox" name="positionReview" ${a?.position_review_enabled ? "checked" : ""}>启用此账户的持仓 AI 评估</label><label>持仓评估间隔（秒）<input type="number" name="positionInterval" min="60" max="86400" step="1" value="${a?.position_review_interval || 300}" required></label><p class="fine">独立于交易前审核，对本平台管理的现有仓位评估止盈、止损和加减仓点位。加仓仍须账户自动交易和该交易对已启用；未落定时不新增加仓计划，既有保护继续。会消耗当前 AI 连接额度。</p><div class="position-review-options"><label class="check"><input type="checkbox" name="profitTrailing" ${a?.profit_trailing_enabled ? "checked" : ""}>盈利移动止损 · 由持仓 AI 评估决定</label><p class="fine">盈利空间足以覆盖估算手续费和滑点时，AI 可设置并移动保护浮盈的止损。止损只向降低回撤的方向移动；不保证获得最大利润。</p><label class="check"><input type="checkbox" name="aiTakeProfit" ${a?.ai_take_profit_enabled ? "checked" : ""}>允许 AI 决定是否分批止盈</label><p class="fine">需此持仓的第一、第二档止盈均已启用。AI 可选择第一档一次止盈，或两档止盈并调整比例；已执行止盈批次不重新分配。两项功能均依赖持仓 AI 评估。</p></div></fieldset><h3>逐交易对设置</h3><p class="muted small">仓位填写标的数量，例如 0.01 BTC。杠杆与逐仓 / 全仓独立设置，风险偏好仍控制亏损及总敞口。未配置的品种不会自动开仓。</p><div id="sizingRows"></div><div class="dialog-footer"><button type="button" id="cancelAccount" class="secondary">取消</button><button class="primary">保存账户设置</button></div></form>`,
   );
   const f = $("accountForm"),
     drafts = new Map();
   f.kind.value = a?.kind || "paper";
   f.exchange.value = a?.exchange || "binance";
+  function syncPositionReview() {
+    f.profitTrailing.disabled = f.aiTakeProfit.disabled =
+      !f.positionReview.checked;
+    if (!f.positionReview.checked)
+      f.profitTrailing.checked = f.aiTakeProfit.checked = false;
+  }
+  f.positionReview.onchange = syncPositionReview;
+  syncPositionReview();
   $("cancelAccount").onclick = () => $("dialog").close();
   function readDrafts() {
     document.querySelectorAll(".sizing-row").forEach((r) =>
@@ -924,6 +976,8 @@ function editAccount(a) {
         auto: a?.auto || false,
         position_review_enabled: f.positionReview.checked,
         position_review_interval: Number(f.positionInterval.value),
+        profit_trailing_enabled: f.profitTrailing.checked,
+        ai_take_profit_enabled: f.aiTakeProfit.checked,
         allowed: f.kind.value === "paper" ? [] : allowed,
         sizing,
       });
@@ -975,6 +1029,10 @@ function resetAccount(id) {
   };
 }
 function renderOrders() {
+  const scope = state.history_scope || { generation: 0, started_at: 0 };
+  $("historyScope").textContent = scope.generation
+    ? `第 ${scope.generation + 1} 轮 · ${time(scope.started_at)} 起统计；跨轮旧仓位不计入新复盘，未决订单继续显示。`
+    : "当前为初始统计轮次；清除后使用新开并完整平仓的交易重新复盘。";
   const names = {
     ...Object.fromEntries(
       Object.entries(state.archived_accounts || {}).map(([id, name]) => [
@@ -998,16 +1056,38 @@ async function loadAudit() {
     const rows = await api("/api/audit");
     $("auditRows").innerHTML =
       rows
+        .filter((r) => r.created >= (state.history_scope?.started_at || 0))
         .slice(0, 30)
         .map(
           (r) =>
-            `<div class="audit-row"><time>${time(r.created)}</time><span>${esc({ v2_account_saved: "账户设置已保存", v2_preferences_saved: "风险偏好或运行状态已更新", v2_account_reset: "模拟账户已重置", v2_watchlist_saved: "监测列表已更新", v2_startup: "服务启动，所有账户自动交易暂停", v2_execution_paused: "交易所执行已暂停", v2_open: "模拟开仓", v2_close: "模拟平仓", v2_add: "模拟加仓", v2_ai_review: "AI 复核完成", login: "登录成功", logout: "退出登录" }[r.event] || r.event)}</span></div>`,
+            `<div class="audit-row"><time>${time(r.created)}</time><span>${esc({ history_reset: "交易记录与复盘样本已重置", position_plan_changed: "持仓 AI 点位已调整", position_review: "持仓 AI 评估完成", v2_account_saved: "账户设置已保存", v2_preferences_saved: "风险偏好或运行状态已更新", v2_account_reset: "模拟账户已重置", v2_watchlist_saved: "监测列表已更新", v2_startup: "服务启动，所有账户自动交易暂停", v2_execution_paused: "交易所执行已暂停", v2_open: "模拟开仓", v2_close: "模拟平仓", v2_add: "模拟加仓", v2_ai_review: "AI 复核完成", login: "登录成功", logout: "退出登录" }[r.event] || r.event)}</span></div>`,
         )
         .join("") || '<p class="empty">暂无操作记录</p>';
   } catch (e) {
     toast(e.message);
   }
 }
+$("resetHistory").onclick = () => {
+  const generation = state.history_scope?.generation || 0;
+  modal(
+    "清除交易记录并重置复盘样本",
+    `<p>将全部账户已有交易移出当前记录列表，并重新积累 AI 定期复盘评分样本。旧评分不再用于本轮评估。</p><div class="notice-box">当前仓位、资金、止盈止损和策略参数保留。重置前已持有的仓位，即使之后平仓也不计入本轮评分；未决订单仍须核对。底层订单与审计记录保留，防止重复下单。</div><form id="historyResetForm"><label>输入 RESET HISTORY 确认<input name="confirmation" autocomplete="off" required pattern="RESET HISTORY" placeholder="RESET HISTORY"></label><div class="dialog-footer"><button type="button" id="cancelHistoryReset" class="secondary">取消</button><button class="danger-outline">清除并开始新一轮</button></div></form>`,
+  );
+  $("cancelHistoryReset").onclick = () => $("dialog").close();
+  $("historyResetForm").onsubmit = (e) => {
+    e.preventDefault();
+    action(async () => {
+      await api("/api/v2/history/reset", {
+        confirmation: e.currentTarget.confirmation.value,
+        expected_generation: generation,
+      });
+      $("dialog").close();
+      await refresh();
+      await loadAudit();
+      toast("交易记录已清除，复盘样本从新一轮开始积累");
+    });
+  };
+};
 $("refreshAudit").onclick = loadAudit;
 $("editWatch").onclick = () => {
   let draft = structuredClone(state.watchlist);

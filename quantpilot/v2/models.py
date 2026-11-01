@@ -131,11 +131,16 @@ class Account(Model):
     auto: bool = False
     position_review_enabled: bool = False
     position_review_interval: int = Field(default=300, ge=60, le=86400, strict=True)
+    profit_trailing_enabled: bool = False
+    ai_take_profit_enabled: bool = False
     allowed: list[str] = Field(default_factory=list, max_length=30)
     sizing: list[Sizing] = Field(default_factory=list, max_length=30)
 
     @model_validator(mode="after")
     def valid_sizing(self):
+        if not self.position_review_enabled:
+            self.profit_trailing_enabled = False
+            self.ai_take_profit_enabled = False
         if self.kind == "paper":
             self.capital = 10000 if self.capital is None else self.capital
         else:
@@ -161,6 +166,11 @@ class AccountSecrets(Model):
 class Reset(Model):
     capital: float = Field(ge=100, le=100000000)
     confirmation: Literal["RESET"]
+
+
+class HistoryReset(Model):
+    confirmation: Literal["RESET HISTORY"]
+    expected_generation: int = Field(ge=0, strict=True)
 
 
 class KeyInput(Model):
