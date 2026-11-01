@@ -2057,6 +2057,8 @@ dialog[open] {
   margin: 0;
 }
 .notification-grid {
+  width: 100%;
+  max-width: 680px;
   display: grid;
   grid-template-columns: minmax(120px, 1fr) 90px 90px;
   gap: 12px;
