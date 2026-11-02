@@ -1,0 +1,10 @@
+[Unit]
+Description=Check QuantPilot authorized update requests
+
+[Timer]
+OnBootSec=60
+OnUnitInactiveSec=60
+Unit=quantpilot-update.service
+
+[Install]
+WantedBy=timers.target

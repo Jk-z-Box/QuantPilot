@@ -100,6 +100,16 @@ class Store:
                 config = self.read(db, "strategy")
                 config["enabled"] = False
                 self.write(db, "strategy", config)
+            row = db.execute("SELECT value FROM kv WHERE key='v2_preferences'").fetchone()
+            if row:
+                prefs = json.loads(row[0])
+                prefs["halted"] = enabled
+                self.write(db, "v2_preferences", prefs)
+                if enabled:
+                    accounts = self.read(db, "v2_accounts")
+                    for account in accounts.values():
+                        account["auto"] = False
+                    self.write(db, "v2_accounts", accounts)
             self.audit(db, "kill_switch", {"enabled": enabled})
 
 

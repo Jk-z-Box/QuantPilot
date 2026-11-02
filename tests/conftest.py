@@ -9,6 +9,7 @@ from quantpilot.config import Settings, hash_password
 from quantpilot.engine import Engine, OrderRequest
 from quantpilot.market import Market, MarketError, Quote
 from quantpilot.store import Store
+from quantpilot.v2.models import Sizing
 
 
 class FakeMarket(Market):
@@ -79,3 +80,61 @@ def logged(client):
     assert response.status_code == 200
     client.headers["x-csrf-token"] = response.json()["csrf"]
     return client
+
+
+@pytest.fixture
+def workspace(app):
+    return app.state.workspace
+
+
+@pytest.fixture
+def quote():
+    return {
+        "mid": 100.0,
+        "bid": 99.99,
+        "ask": 100.01,
+        "timestamp": time.time(),
+        "received_at": time.time(),
+        "funding_rate": 0.0001,
+        "open_interest": 100,
+        "mark": 100,
+        "source": "test",
+    }
+
+
+@pytest.fixture
+def opportunity():
+    return {
+        "id": "test-signal",
+        "instrument_id": "btc",
+        "exchange": "binance",
+        "symbol": "BTC/USDT:USDT",
+        "direction": "long",
+        "score": 90,
+        "valid": True,
+        "coverage": 100,
+        "evaluated_at": time.time(),
+        "expires_at": time.time() + 120,
+        "profile": "balanced",
+        "blockers": [],
+        "reasons": [],
+        "plan": {
+            "entry": 100,
+            "entry_low": 99,
+            "entry_high": 101,
+            "stop": 96,
+            "targets": [{"price": 106, "ratio": 0.5}, {"price": 112, "ratio": 0.5}],
+            "rr": 2,
+            "risk_per_unit": 4,
+            "add_at": 103,
+            "reduce_at": 98,
+        },
+    }
+
+
+@pytest.fixture
+def account(workspace):
+    a = workspace.store.get("v2_accounts")["paper-default"]
+    a["auto"] = True
+    a["sizing"] = [Sizing(instrument_id="btc", quantity=1).model_dump()]
+    return workspace.save_account(a)
