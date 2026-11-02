@@ -10,6 +10,7 @@ import ccxt
 
 from ..market import decimal as D
 from .accounts import ledger, size_order
+from .funds import snapshot
 from .limits import contract_limits
 from .logic import check_version
 from .margin import mode
@@ -84,7 +85,7 @@ class ExchangeBroker:
                 "cross_margin",
             )
             ready = (
-                cert["version"] == "0.10.0"
+                cert["version"] == "0.11.0"
                 and cert["exchange"] == account["exchange"]
                 and cert["credential_fingerprint"] == fingerprint
                 and all(cert["checks"].get(k) is True for k in required)
@@ -101,48 +102,14 @@ class ExchangeBroker:
         with self.locks[account["id"]]:
             bal = client.fetch_balance({"type": "swap"})
             positions = client.fetch_positions()
-            gate_mode = (
-                client.privateFuturesGetSettleAccounts({"settle": "usdt"}).get("in_dual_mode")
+            gate_metadata = (
+                client.privateFuturesGetSettleAccounts({"settle": "usdt"})
                 if account["exchange"] == "gate"
                 else None
             )
-        out = []
-        for p in positions:
-            if not p.get("contracts"):
-                continue
-            if account["exchange"] == "gate":
-                p = {**p, "hedged": gate_mode}
-            out.append(
-                {
-                    k: p.get(k)
-                    for k in (
-                        "symbol",
-                        "side",
-                        "contracts",
-                        "contractSize",
-                        "entryPrice",
-                        "markPrice",
-                        "notional",
-                        "unrealizedPnl",
-                        "liquidationPrice",
-                        "leverage",
-                        "marginMode",
-                        "hedged",
-                        "initialMargin",
-                        "maintenanceMargin",
-                        "maintenanceMarginPercentage",
-                    )
-                }
-            )
-        usdt = bal.get("USDT", {})
-        return {
-            "equity": str(D(usdt.get("total") or 0)),
-            "available": str(D(usdt.get("free") or 0)),
-            "positions": out,
-            "checked_at": time.time(),
-            "source": "exchange_account",
-            "execution": self.availability(account),
-        }
+        result = snapshot(account, bal, positions, gate_metadata)
+        result["execution"] = self.availability(account)
+        return result
 
     def order(self, account, client, symbol, kind, side, amount, price, params):
         params = dict(params)

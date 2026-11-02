@@ -17,6 +17,7 @@ from .codex_client import CodexConnection
 from .entry_status import report as entry_report
 from .execution import ExchangeBroker
 from .feeds import Feeds
+from .funds import AccountStreams
 from .history import History
 from .limits import contract_limits
 from .logic import LogicEngine
@@ -86,6 +87,7 @@ class Workspace:
             accounts = {aid: Account.model_validate(a).model_dump() for aid, a in accounts.items()}
             self.store.write(db, "v2_accounts", accounts)
             self.store.write(db, "v2_sizing_migration", migrated)
+        self.funds = AccountStreams(self)
         self.chatgpt = ChatGPTConnection(vault)
         self.codex = CodexConnection()
         self.research = ResearchEngine(self)
@@ -773,7 +775,9 @@ class Workspace:
         accounts = []
         for a in self.store.get("v2_accounts").values():
             summary = (
-                valuation(books[a["id"]], quotes, now) if a["kind"] == "paper" else external.get(a["id"], {})
+                valuation(books[a["id"]], quotes, now)
+                if a["kind"] == "paper"
+                else self.funds.display(a, external.get(a["id"], {}))
             )
             for position in summary.get("positions", []):
                 key = position.get("instrument_id") or next(
@@ -822,7 +826,7 @@ class Workspace:
         return {
             "history_scope": self.logic.history_scope(),
             "position_changes": changes,
-            "version": "0.10.0",
+            "version": "0.11.0",
             "now": now,
             "demo": self.market.demo,
             "watchlist": self.store.get("v2_watchlist"),
@@ -877,6 +881,7 @@ class Workspace:
         self.quote_thread.start()
         self.thread = threading.Thread(target=loop, name="mission-control", daemon=True)
         self.thread.start()
+        self.funds.start()
         self.research.start()
         self.notifications.start()
 
@@ -891,6 +896,7 @@ class Workspace:
 
     def stop(self):
         self.stop_event.set()
+        self.funds.stop()
         self.action_review.pool.shutdown(wait=False, cancel_futures=True)
         self.position_reviews.pool.shutdown(wait=False, cancel_futures=True)
         self.history.pool.shutdown(wait=False, cancel_futures=True)

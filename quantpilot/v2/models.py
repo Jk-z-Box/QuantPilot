@@ -130,6 +130,7 @@ class Account(Model):
     capital: float | None = Field(default=None, ge=100, le=100000000)
     auto: bool = False
     ai_action_enabled: bool = False
+    balance_stream_enabled: bool = True
     position_review_enabled: bool = False
     position_review_interval: int = Field(default=300, ge=60, le=86400, strict=True)
     profit_trailing_enabled: bool = False

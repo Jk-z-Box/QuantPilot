@@ -116,7 +116,7 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
             if request.headers.get("content-type", "").split(";")[0] != "application/json":
                 return JSONResponse({"detail": "json_required"}, status_code=415)
         response = await call_next(request)
-        response.headers.update({"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+        response.headers.update({"Cache-Control": "no-store, no-transform" if request.url.path == "/api/v2/account-events" else "no-store", "X-Content-Type-Options": "nosniff",
             "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer",
             "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"})
         if settings.secure_cookie:
@@ -152,7 +152,7 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
 
     @app.get("/healthz")
     def health():
-        return {"status": "ok", "version": "0.10.0", "mode": "paper-first"}
+        return {"status": "ok", "version": "0.11.0", "mode": "paper-first"}
 
     @app.post("/api/login")
     def login(body: Login, request: Request, response: Response):

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import threading
 import time
 from typing import Literal
 
 from fastapi import Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import Field, SecretStr
 
 from .ai import list_models
@@ -60,6 +64,35 @@ def install(app, workspace, session, mutation):
     @app.get("/api/v2/state", dependencies=[Depends(session)])
     def state():
         return workspace.state()
+
+    @app.get("/api/v2/account-events", dependencies=[Depends(session)])
+    async def account_events(request: Request):
+        try:
+            queue = workspace.funds.subscribe()
+        except ValueError as exc:
+            raise HTTPException(429, str(exc)) from None
+
+        async def events():
+            try:
+                while not await request.is_disconnected():
+                    try:
+                        session(request)  # Revoke open streams on logout/password change/expiry.
+                    except HTTPException:
+                        yield "event: expired\ndata: {}\n\n"
+                        return
+                    try:
+                        packet = await asyncio.wait_for(queue.get(), 5)
+                        yield "event: accounts\ndata: " + json.dumps(packet) + "\n\n"
+                    except TimeoutError:
+                        yield "event: heartbeat\ndata: {}\n\n"
+            finally:
+                workspace.funds.unsubscribe(queue)
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"X-Accel-Buffering": "no", "Cache-Control": "no-store, no-transform"},
+        )
 
     @app.post("/api/v2/history/reset", dependencies=[Depends(mutation)])
     def history_reset(body: HistoryReset):
@@ -203,18 +236,22 @@ def install(app, workspace, session, mutation):
 
     @app.post("/api/v2/accounts/{aid}/check", dependencies=[Depends(mutation)])
     def check(aid: str):
-        a = workspace.store.get("v2_accounts").get(aid)
-        if not a or a["kind"] == "paper":
-            raise HTTPException(404, "请选择交易所账户")
-        try:
-            result = workspace.exchange.reconcile(a)
-            with workspace.store.transaction() as db:
-                external = workspace.store.read(db, "v2_external")
-                external[aid] = result
-                workspace.store.write(db, "v2_external", external)
-            return result
-        except Exception:
-            raise HTTPException(503, "账户读取失败；请核对密钥、权限、交易所及测试/实盘环境") from None
+        with workspace.exchange.guard:
+            guard = workspace.exchange.locks.setdefault(aid, threading.RLock())
+        with guard:
+            a = workspace.store.get("v2_accounts").get(aid)
+            if not a or a["kind"] == "paper":
+                raise HTTPException(404, "请选择交易所账户")
+            try:
+                result = workspace.exchange.reconcile(a)
+                with workspace.store.transaction() as db:
+                    external = workspace.store.read(db, "v2_external")
+                    external[aid] = {**external.get(aid, {}), **result}
+                    workspace.store.write(db, "v2_external", external)
+                workspace.funds.publish()
+                return result
+            except Exception:
+                raise HTTPException(503, "账户读取失败；请核对密钥、权限、交易所及测试/实盘环境") from None
 
     @app.post("/api/v2/accounts/{aid}/reset", dependencies=[Depends(mutation)])
     def reset(aid: str, body: Reset):

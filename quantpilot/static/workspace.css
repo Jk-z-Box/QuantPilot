@@ -2328,3 +2328,32 @@ dialog[open] {
     gap: 4px;
   }
 }
+
+.funds-stream {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  padding: 12px 14px;
+  margin: 0 0 18px;
+  background: var(--bg, #f4f8f6);
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #6e847b;
+  overflow-wrap: anywhere;
+}
+.funds-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+.funds-stream > span:last-child {
+  flex-basis: 100%;
+}
+@media (max-width: 600px) {
+  .funds-stream {
+    gap: 4px 12px;
+    padding: 10px 12px;
+  }
+}
