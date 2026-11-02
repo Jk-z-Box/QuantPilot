@@ -85,7 +85,7 @@ class ExchangeBroker:
                 "cross_margin",
             )
             ready = (
-                cert["version"] == "0.11.0"
+                cert["version"] == "0.11.1"
                 and cert["exchange"] == account["exchange"]
                 and cert["credential_fingerprint"] == fingerprint
                 and all(cert["checks"].get(k) is True for k in required)
@@ -98,6 +98,7 @@ class ExchangeBroker:
         return {"ready": ready, "reason": "验收记录有效" if ready else "缺少与当前账户匹配的实盘验收记录"}
 
     def read(self, account):
+        started_at = time.time()
         client = self.client(account)
         with self.locks[account["id"]]:
             bal = client.fetch_balance({"type": "swap"})
@@ -108,6 +109,7 @@ class ExchangeBroker:
                 else None
             )
         result = snapshot(account, bal, positions, gate_metadata)
+        result["read_started_at"] = started_at
         result["execution"] = self.availability(account)
         return result
 

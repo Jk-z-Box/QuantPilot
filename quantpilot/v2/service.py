@@ -591,6 +591,7 @@ class Workspace:
             for future in futures:
                 future.result()
         self.execute()
+        self.funds.publish()
         self.position_reviews.scheduled()
 
     def review_ai(self, prefs=None):
@@ -826,7 +827,7 @@ class Workspace:
         return {
             "history_scope": self.logic.history_scope(),
             "position_changes": changes,
-            "version": "0.11.0",
+            "version": "0.11.1",
             "now": now,
             "demo": self.market.demo,
             "watchlist": self.store.get("v2_watchlist"),

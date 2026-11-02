@@ -22,6 +22,35 @@ const fmt = (v, d = 2) =>
 const price = (v) => fmt(v, Number(v) < 10 ? 4 : 2),
   time = (v) =>
     v ? new Date(v * 1000).toLocaleString("zh-CN", { hour12: false }) : "—";
+const timeMs = (v) => {
+  if (!v) return "—";
+  const d = new Date(v);
+  return (
+    d.toLocaleTimeString("zh-CN", { hour12: false }) +
+    "." +
+    String(d.getMilliseconds()).padStart(3, "0")
+  );
+};
+let fundsClock = null,
+  fundsClockTimer = null,
+  fundsRenderFrame = null,
+  fundsMetrics = null;
+async function syncFundsClock() {
+  let best = null;
+  for (let i = 0; i < 3; i++) {
+    const start = performance.now(),
+      wall = Date.now();
+    const response = await api("/api/v2/clock");
+    const rtt = performance.now() - start;
+    const sample = {
+      offset: response.server_ms - (wall + rtt / 2),
+      uncertainty: rtt / 2,
+      rtt,
+    };
+    if (!best || rtt < best.rtt) best = sample;
+  }
+  fundsClock = best;
+}
 const exchangeName = { binance: "BINANCE", okx: "OKX", gate: "GATE" },
   kindName = { paper: "本地模拟", demo: "交易所测试", live: "真实账户" },
   directions = { long: "做多", short: "做空", wait: "等待", flat: "震荡" };
@@ -216,6 +245,10 @@ $("logout").onclick = () =>
   });
 function stop() {
   clearInterval(fundsWatchdog);
+  clearInterval(fundsClockTimer);
+  cancelAnimationFrame(fundsRenderFrame);
+  fundsClock = fundsMetrics = null;
+  fundsRenderFrame = null;
   fundsEvents?.close();
   fundsEvents = null;
   fundsConnected = false;
@@ -652,18 +685,26 @@ function mergeFunds(packet) {
   if (!state) return;
   for (const update of packet.accounts || []) {
     const a = state.accounts.find((x) => x.id === update.id);
-    if (!a || a.kind === "paper" || !a.balance_stream_enabled) continue;
+    if (!a || (a.kind !== "paper" && !a.balance_stream_enabled)) continue;
     const old = a.summary?.positions || [];
     a.summary = {
       ...update.summary,
       positions: (update.summary.positions || []).map((p) => {
         const prior = old.find(
-          (x) => x.symbol === p.symbol && x.side === p.side,
+          (x) =>
+            (a.kind === "paper"
+              ? x.instrument_id === p.instrument_id
+              : x.symbol === p.symbol) && x.side === p.side,
         );
         return { ...prior, ...p };
       }),
     };
   }
+}
+function fundsDelayLabel() {
+  return fundsMetrics && fundsClock
+    ? `网页传输估算 ${Math.round(fundsMetrics.transport)} ± ${Math.ceil(fundsClock.uncertainty)} ms · 页面处理 ${fundsMetrics.render.toFixed(1)} ms`
+    : "正在测量网页链路延迟";
 }
 function streamLabel(a) {
   if (a.kind === "paper") return "";
@@ -687,11 +728,13 @@ function streamLabel(a) {
       : status === "disabled"
         ? "已保留最近快照，可手动读取与核对"
         : "以最近核对值展示，连接恢复后重新核对资金";
-  return `<span class="funds-status ${status === "live" ? "positive" : "muted"}"><i class="dot"></i>${labels[status] || "正在连接"}</span><span>资金核对 ${time(s.checked_at)}</span>${s.balance_warning ? `<span class="negative">${esc(s.balance_warning)}</span>` : ""}<span>${note}</span>`;
+  const dt = s.data_times || {};
+  const delay = fundsDelayLabel();
+  return `<span class="funds-status ${status === "live" ? "positive" : "muted"}"><i class="dot"></i>${labels[status] || "正在连接"}</span><span class="funds-latency" title="服务器发出到浏览器接收的估算，不包含交易所推送耗时；误差范围来自网络往返测量。">${delay}</span><span>资金接收 ${timeMs(dt.funds_ms || s.checked_at * 1000)} · 仓位接收 ${timeMs(dt.positions_ms || s.checked_at * 1000)}</span><span>可用资金核对 ${timeMs(dt.available_ms || s.checked_at * 1000)}${dt.price_ms ? " · 标记价 " + timeMs(dt.price_ms) : ""}</span>${s.wallet != null ? `<span>钱包余额 ${fmt(s.wallet)} USDT</span>` : ""}${s.pending_reconcile ? "<span>仓位已推送 · 完整资金核对中</span>" : ""}${s.balance_warning ? `<span class="negative">${esc(s.balance_warning)}</span>` : ""}<span>${note}</span>`;
 }
 function patchFunds() {
   if (!state) return;
-  for (const a of state.accounts.filter((x) => x.kind !== "paper")) {
+  for (const a of state.accounts) {
     const card = document.querySelector(`[data-account-card="${a.id}"]`);
     if (!card) continue;
     for (const field of ["equity", "available", "unrealized"]) {
@@ -703,19 +746,23 @@ function patchFunds() {
             Number(a.summary?.[field]) >= 0 ? "positive" : "negative";
       }
     }
-    card.querySelector(".funds-stream").innerHTML = streamLabel(a);
+    const stream = card.querySelector(".funds-stream");
+    if (stream) stream.innerHTML = streamLabel(a);
     for (const row of document.querySelectorAll(
       `[data-position-account="${a.id}"]`,
     )) {
       const p = a.summary?.positions?.find(
         (p) =>
-          p.symbol === row.dataset.positionSymbol &&
+          (p.instrument_id || p.symbol) === row.dataset.positionSymbol &&
           p.side === row.dataset.positionSide,
       );
       const el = row.querySelector('[data-label="浮动盈亏"]');
       if (p && el) {
-        el.textContent = fmt(p.unrealizedPnl);
-        el.className = Number(p.unrealizedPnl) >= 0 ? "positive" : "negative";
+        el.textContent = fmt(p.unrealized ?? p.unrealizedPnl);
+        el.className =
+          Number(p.unrealized ?? p.unrealizedPnl) >= 0
+            ? "positive"
+            : "negative";
       }
     }
   }
@@ -725,11 +772,11 @@ function positionShape() {
     state?.accounts.map((a) => [
       a.id,
       a.summary?.positions?.map((p) => [
-        p.symbol,
+        p.instrument_id || p.symbol,
         p.side,
-        p.contracts,
-        p.entryPrice,
-        p.liquidationPrice,
+        p.qty ?? p.contracts,
+        p.entry ?? p.entryPrice,
+        p.liquidation ?? p.liquidationPrice,
       ]),
     ]),
   );
@@ -759,17 +806,50 @@ function startFunds() {
     $("app").hidden = true;
     $("login").hidden = false;
   });
+  syncFundsClock().catch(() => {
+    fundsClock = null;
+  });
+  fundsClockTimer = setInterval(
+    () =>
+      syncFundsClock().catch(() => {
+        fundsClock = null;
+      }),
+    60000,
+  );
   fundsEvents.addEventListener("accounts", (event) => {
     try {
       fundsReceivedAt = Date.now();
       fundsConnected = true;
-      const packet = JSON.parse(event.data),
-        before = positionShape();
+      const packet = JSON.parse(event.data);
       if (fundsLatest && packet.sequence <= fundsLatest.sequence) return;
+      packet.received_wall = Date.now();
+      packet.received_perf = performance.now();
       fundsLatest = packet;
-      mergeFunds(packet);
-      if (before !== positionShape()) renderAccounts();
-      patchFunds();
+      if (fundsRenderFrame !== null) return;
+      fundsRenderFrame = requestAnimationFrame(() => {
+        fundsRenderFrame = null;
+        const latest = fundsLatest,
+          before = positionShape();
+        if (!latest || !state) return;
+        mergeFunds(latest);
+        if (before !== positionShape()) renderPositions();
+        fundsMetrics = {
+          transport: fundsClock
+            ? Math.max(
+                0,
+                latest.received_wall +
+                  fundsClock.offset -
+                  latest.published_at * 1000,
+              )
+            : 0,
+          render: performance.now() - latest.received_perf,
+        };
+        patchFunds();
+        fundsMetrics.render = performance.now() - latest.received_perf;
+        document.querySelectorAll(".funds-latency").forEach((el) => {
+          el.textContent = fundsDelayLabel();
+        });
+      });
     } catch {
       fundsConnected = false;
       patchFunds();
@@ -793,6 +873,11 @@ function renderAccounts(force = false) {
       })
       .join("") ||
     '<div class="card empty">尚无账户。点击“添加账户”创建模拟或交易所账户。</div>';
+  renderPositions();
+  renderPositionChanges();
+}
+function renderPositions() {
+  const accounts = state.accounts;
   $("positions").innerHTML =
     accounts
       .flatMap((a) =>
@@ -808,19 +893,21 @@ function renderAccounts(force = false) {
               )
               .join("<br>") || "止盈：未计划";
           const liquidation =
-            p.liquidation_verified === false
-              ? "未计划（行情待验证）"
-              : p.liquidation_status === "no_positive_price"
-                ? "未计划（当前无正价格强平线）"
-                : planned(p.liquidation ?? p.liquidationPrice);
-          return `<tr data-position-account="${a.id}" data-position-symbol="${esc(p.symbol)}" data-position-side="${esc(p.side)}"><td data-label="账户 / 市场">${esc(a.name)}<small>${esc(item?.symbol || p.symbol)}</small></td><td data-label="方向 / 数量">${directions[p.side] || esc(p.side)} · ${(p.margin_mode || p.marginMode || "isolated") === "cross" ? "全仓" : "逐仓"} ${fmt(p.leverage, 0)}×<small>${fmt(p.qty ?? (p.contracts != null && p.contractSize != null ? p.contracts * p.contractSize : null), 8)}</small></td><td data-label="开仓均价">${price(p.entry ?? p.entryPrice)}</td><td data-label="浮动盈亏" class="${Number(p.unrealized ?? p.unrealizedPnl) >= 0 ? "positive" : "negative"}">${fmt(p.unrealized ?? p.unrealizedPnl)}${p.price_verified === false ? "<small>行情待验证</small>" : ""}</td><td data-label="当前计划点位" class="position-points">${targetText}<br>止损：${planned(points.stop)}<br>加仓：${planned(points.add_at)}<br>减仓：${planned(points.reduce_at)}<br>${a.kind === "paper" ? "预估强平" : "交易所强平"}：${liquidation}<small>${esc(points.review_status || "未计划")} · 点位不代表已成交</small></td><td data-label="操作">${a.kind === "paper" ? `<button class="text-button" data-close-position="${a.id}" data-position="${esc(p.instrument_id)}">减仓 / 平仓</button>` : "交易所原生保护"}</td></tr>`;
+            p.stream_pending && p.liquidationPrice == null
+              ? "核对中"
+              : p.liquidation_verified === false
+                ? "未计划（行情待验证）"
+                : p.liquidation_status === "no_positive_price"
+                  ? "未计划（当前无正价格强平线）"
+                  : planned(p.liquidation ?? p.liquidationPrice);
+          return `<tr data-position-account="${a.id}" data-position-symbol="${esc(p.instrument_id || p.symbol)}" data-position-side="${esc(p.side)}"><td data-label="账户 / 市场">${esc(a.name)}<small>${esc(item?.symbol || p.symbol)}</small></td><td data-label="方向 / 数量">${directions[p.side] || esc(p.side)} · ${(p.margin_mode || p.marginMode || "isolated") === "cross" ? "全仓" : "逐仓"} ${fmt(p.leverage, 0)}×<small>${fmt(p.qty ?? (p.contracts != null && p.contractSize != null ? p.contracts * p.contractSize : null), 8)}</small></td><td data-label="开仓均价">${price(p.entry ?? p.entryPrice)}</td><td data-label="浮动盈亏" class="${Number(p.unrealized ?? p.unrealizedPnl) >= 0 ? "positive" : "negative"}">${fmt(p.unrealized ?? p.unrealizedPnl)}${p.price_verified === false ? "<small>行情待验证</small>" : ""}</td><td data-label="当前计划点位" class="position-points">${targetText}<br>止损：${planned(points.stop)}<br>加仓：${planned(points.add_at)}<br>减仓：${planned(points.reduce_at)}<br>${a.kind === "paper" ? "预估强平" : "交易所强平"}：${liquidation}<small>${esc(points.review_status || "未计划")} · 点位不代表已成交</small></td><td data-label="操作">${a.kind === "paper" ? `<button class="text-button" data-close-position="${a.id}" data-position="${esc(p.instrument_id)}">减仓 / 平仓</button>` : "交易所原生保护"}</td></tr>`;
         }),
       )
       .join("") ||
     '<tr><td colspan="6" class="empty">还没有仓位。启用模拟账户后，系统会等待有效机会。</td></tr>';
   bindAccounts();
-  renderPositionChanges();
 }
+
 function changeValue(key, value) {
   if (value == null) return "未计划";
   if (key === "targets")

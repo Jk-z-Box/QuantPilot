@@ -13,6 +13,10 @@ from decimal import Decimal
 
 import ccxt.pro as ccxtpro
 
+from .accounts import valuation
+from .fund_events import apply as apply_events
+from .fund_events import ingest
+
 
 def number(value):
     try:
@@ -133,7 +137,7 @@ class AccountStreams:
         self.w = workspace
         self.factory = factory or (lambda name, config: getattr(ccxtpro, name)(config))
         self.lock = threading.RLock()
-        self.statuses, self.marks, self.identities = {}, {}, {}
+        self.statuses, self.marks, self.identities, self.events = {}, {}, {}, {}
         self.subscribers, self.sequence = {}, 0
         self.thread, self.loop, self.task = None, None, None
 
@@ -155,6 +159,7 @@ class AccountStreams:
         with self.lock:
             status = copy.deepcopy(self.statuses.get(aid, {})) if self.identities.get(aid) == identity else {}
             marks = dict(self.marks.get(aid, {})) if status.get("state") == "live" else {}
+            events = copy.deepcopy(self.events.get(aid, {})) if status.get("state") == "live" else {}
         if not identity:
             status = {
                 "state": "disabled" if not account.get("balance_stream_enabled", True) else "unconfigured"
@@ -163,22 +168,36 @@ class AccountStreams:
             status = {"state": "connecting"}
         if status.get("state") == "live" and time.time() - status.get("heartbeat_at", 0) > 15:
             status["state"] = "reconnecting"
-        result = mark_valuation(base, marks)
+        pending = apply_events(base, events).get("pending_reconcile")
+        result = apply_events(base if pending else mark_valuation(base, marks), events)
+        if pending:
+            result["positions"] = mark_valuation({**result, "equity": None, "unrealized": None}, marks)[
+                "positions"
+            ]
+        result["data_times"]["price_ms"] = max((v[1] * 1000 for v in marks.values()), default=0)
         result["stream"] = status
         return result
 
     def packets(self):
-        external = self.w.store.get("v2_external")
+        external, books = self.w.store.get("v2_external"), self.w.store.get("v2_ledgers")
+        with self.w.lock:
+            quotes = copy.deepcopy(self.w.quotes)
         return [
-            {"id": a["id"], "summary": self.display(a, external.get(a["id"], {}))}
+            {
+                "id": a["id"],
+                "summary": valuation(books[a["id"]], quotes, time.time())
+                if a["kind"] == "paper"
+                else self.display(a, external.get(a["id"], {})),
+            }
             for a in self.w.store.get("v2_accounts").values()
-            if a["kind"] != "paper"
+            if a["kind"] != "paper" or a["id"] in books
         ]
 
     def publish(self):
         with self.lock:
             self.sequence += 1
-            packet = {"sequence": self.sequence, "published_at": time.time(), "accounts": self.packets()}
+            packet = {"sequence": self.sequence, "accounts": self.packets()}
+            packet["published_at"] = time.time()
             for loop, queue in list(self.subscribers.values()):
 
                 def deliver(q=queue, p=packet):
@@ -207,7 +226,7 @@ class AccountStreams:
             return
         with self.lock:
             if self.identities.get(aid) != identity:
-                self.statuses[aid], self.marks[aid] = {}, {}
+                self.statuses[aid], self.marks[aid], self.events[aid] = {}, {}, {}
             self.identities[aid] = identity
             self.statuses.setdefault(aid, {}).update(values)
         self.publish()
@@ -248,7 +267,7 @@ class AccountStreams:
             },
         )
         tasks, channels, marks = [], set(), {}
-        dirty, subscribed = asyncio.Event(), asyncio.Event()
+        dirty, subscribed, urgent = asyncio.Event(), asyncio.Event(), asyncio.Event()
         required = {
             "gate": {"futures.balances", "futures.positions", "futures.orders"},
             "okx": {"account", "positions", "orders"},
@@ -284,6 +303,7 @@ class AccountStreams:
                 await read_locked()
 
         async def read_locked():
+            read_started_at = time.time()
             balance = await client.fetch_balance({"type": "swap"})
             positions = await client.fetch_positions()
             if account["exchange"] == "gate":
@@ -294,6 +314,7 @@ class AccountStreams:
             else:
                 raw = None
             result = snapshot(account, balance, positions, raw)
+            result["read_started_at"] = read_started_at
             if await asyncio.to_thread(self.persist, account, identity, result):
                 state["base"] = result
                 state["symbols"] = tuple(
@@ -306,12 +327,17 @@ class AccountStreams:
 
         async def watch(method):
             while True:
-                await getattr(client, method)()
-                marks.clear()
-                with self.lock:
-                    self.marks[aid] = {}
+                payload = await getattr(client, method)()
+                received_ms = time.time() * 1000
+                if self.current(aid, identity):
+                    with self.lock:
+                        self.events[aid] = ingest(
+                            self.events.get(aid, {}), account["exchange"], method, payload, received_ms
+                        )
+                        self.statuses.setdefault(aid, {})["event_at"] = received_ms / 1000
+                    self.publish()  # Native fields and position changes go out before REST reconciliation.
+                urgent.set()
                 dirty.set()
-                self.status(aid, identity, event_at=time.time())
 
         async def watch_marks():
             while True:
@@ -343,7 +369,16 @@ class AccountStreams:
                     await asyncio.wait_for(dirty.wait(), 60)
                 except TimeoutError:
                     pass
-                await asyncio.sleep(max(0.15, 1 - (time.monotonic() - state["last_read"])))
+                if not urgent.is_set():
+                    try:
+                        await asyncio.wait_for(
+                            urgent.wait(), max(0.01, 1 - (time.monotonic() - state["last_read"]))
+                        )
+                    except TimeoutError:
+                        pass
+                # Private updates interrupt the price-only reconcile delay. Only collapse the same burst.
+                await asyncio.sleep(0.01)
+                urgent.clear()
                 dirty.clear()
                 await read()
 
@@ -429,6 +464,7 @@ class AccountStreams:
                         with self.lock:
                             self.statuses.pop(aid, None)
                             self.marks.pop(aid, None)
+                            self.events.pop(aid, None)
                             self.identities.pop(aid, None)
                         self.publish()
                 for aid, (account, identity) in wanted.items():

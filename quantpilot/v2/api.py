@@ -65,6 +65,10 @@ def install(app, workspace, session, mutation):
     def state():
         return workspace.state()
 
+    @app.get("/api/v2/clock", dependencies=[Depends(session)])
+    def clock():
+        return {"server_ms": time.time() * 1000}
+
     @app.get("/api/v2/account-events", dependencies=[Depends(session)])
     async def account_events(request: Request):
         try:
