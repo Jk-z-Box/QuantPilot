@@ -16,9 +16,14 @@ from quantpilot.v2.rules import Parameters, effective
 from quantpilot.v2.signals import evaluate
 
 
-def enable_actions(w, monkeypatch, decision="approve"):
+def enable_actions(w, monkeypatch, account, decision="approve"):
     w.vault.put("v2:ai:openai", {"apiKey": "test-only"})
-    w.preferences({**w.store.get("v2_preferences"), "ai_model": "test-model", "ai_action_enabled": True})
+    w.preferences({**w.store.get("v2_preferences"), "ai_model": "test-model", "ai_action_enabled": False})
+    account.update(w.save_account({**account, "ai_action_enabled": True}))
+    # Market sharing is integration-tested in test_v0100; these tests cover account guards.
+    monkeypatch.setattr(
+        w.action_review.market, "inspect", lambda op, q, p: {"state": "approved", "opportunity": op}
+    )
     callbacks = []
     monkeypatch.setattr(w.action_review.pool, "submit", lambda fn, *args: callbacks.append((fn, args)))
     response = Decision(
@@ -156,7 +161,7 @@ def test_paper_events_only_after_committed_fill(workspace, account, opportunity,
 
 
 def test_action_review_blocks_until_approved(workspace, account, opportunity, quote, monkeypatch):
-    callbacks, _ = enable_actions(workspace, monkeypatch)
+    callbacks, _ = enable_actions(workspace, monkeypatch, account)
     with pytest.raises(ValueError, match="等待"):
         paper_enter(workspace, account, opportunity, quote)
     assert not workspace.store.get("v2_ledgers")[account["id"]]["positions"]
@@ -166,7 +171,7 @@ def test_action_review_blocks_until_approved(workspace, account, opportunity, qu
 
 
 def test_ai_rejection_cannot_open(workspace, account, opportunity, quote, monkeypatch):
-    callbacks, _ = enable_actions(workspace, monkeypatch, "reject")
+    callbacks, _ = enable_actions(workspace, monkeypatch, account, "reject")
     gate = workspace.action_review
     assert gate.inspect(account["id"], "btc", "open", quote, opportunity)["state"] == "pending"
     run_job(callbacks)
@@ -177,8 +182,10 @@ def test_ai_rejection_cannot_open(workspace, account, opportunity, quote, monkey
 
 def test_ai_timeout_blocks_entry_and_allows_protection(workspace, account, opportunity, quote, monkeypatch):
     paper_enter(workspace, account, opportunity, quote)
-    callbacks, _ = enable_actions(workspace, monkeypatch)
+    callbacks, _ = enable_actions(workspace, monkeypatch, account)
     gate = workspace.action_review
+    # Isolate async deadline behavior from sizing eligibility (tested separately).
+    monkeypatch.setattr("quantpilot.v2.action_review.account_context", lambda *a: {})
     for action in ("open", "add", "stop_loss", "take_profit", "liquidation_distance"):
         gate.last_requests.clear()  # Each case independently tests timeout, not the shared cadence.
         assert gate.inspect(account["id"], "btc", action, quote, opportunity)["state"] == "pending"
@@ -197,7 +204,7 @@ def test_ai_timeout_blocks_entry_and_allows_protection(workspace, account, oppor
 
 def test_disconnected_ai_stop_loss_still_fills(workspace, account, opportunity, quote, monkeypatch):
     paper_enter(workspace, account, opportunity, quote)
-    enable_actions(workspace, monkeypatch)
+    enable_actions(workspace, monkeypatch, account)
     monkeypatch.setattr(ai_client, "ready", lambda *a: False)
     q = {**quote, "mid": 95.0, "bid": 94.99, "ask": 95.01}
     workspace.paper.protect(account, {"btc": q}, {})
@@ -206,7 +213,7 @@ def test_disconnected_ai_stop_loss_still_fills(workspace, account, opportunity, 
 
 
 def test_ai_ticket_rejected_after_balance_changes(workspace, account, opportunity, quote, monkeypatch):
-    callbacks, _ = enable_actions(workspace, monkeypatch)
+    callbacks, _ = enable_actions(workspace, monkeypatch, account)
     gate = workspace.action_review
     gate.inspect(account["id"], "btc", "open", quote, opportunity)
     run_job(callbacks)
@@ -221,7 +228,7 @@ def test_ai_ticket_rejected_after_balance_changes(workspace, account, opportunit
 
 
 def test_ai_adjusted_points_are_validated(workspace, account, opportunity, quote, monkeypatch):
-    callbacks, result = enable_actions(workspace, monkeypatch, "adjust")
+    callbacks, result = enable_actions(workspace, monkeypatch, account, "adjust")
     result.update(stop=97.0, target_1=106.0, target_2=111.0)
     gate = workspace.action_review
     gate.inspect(account["id"], "btc", "open", quote, opportunity)
@@ -428,7 +435,7 @@ def test_snapshot_parser_never_uses_model_numbers():
 
 def test_ai_tp_adjustment_moves_trigger_not_fakes_fill(workspace, account, opportunity, quote, monkeypatch):
     paper_enter(workspace, account, opportunity, quote)
-    callbacks, result = enable_actions(workspace, monkeypatch, "adjust")
+    callbacks, result = enable_actions(workspace, monkeypatch, account, "adjust")
     result.update(target_1=108.0, target_2=114.0)
     q = {**quote, "mid": 107.0, "bid": 106.99, "ask": 107.01}
     assert workspace.paper.close(account["id"], "btc", q, 0.5, "take_profit", 0)["status"] == "pending"
@@ -460,7 +467,7 @@ def test_ordinary_ai_failure_does_not_abort_other_stop_protection(
     workspace, account, opportunity, quote, monkeypatch
 ):
     paper_enter(workspace, account, opportunity, quote)
-    enable_actions(workspace, monkeypatch)
+    enable_actions(workspace, monkeypatch, account)
     monkeypatch.setattr(ai_client, "ready", lambda *a: False)
     assert workspace.paper.close(account["id"], "btc", quote, 0.5, "risk_reduce")["status"] == "rejected"
     q = {**quote, "mid": 95.0, "bid": 94.99, "ask": 95.01}

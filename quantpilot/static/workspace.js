@@ -145,6 +145,7 @@ function accountPayload(a) {
       "exchange",
       "capital",
       "auto",
+      "ai_action_enabled",
       "position_review_enabled",
       "position_review_interval",
       "profit_trailing_enabled",
@@ -647,7 +648,7 @@ function renderAccounts(force = false) {
     accounts
       .map((a) => {
         const s = a.summary || {};
-        return `<article class="card account-card"><div class="card-head"><div><p class="eyebrow">${exchangeName[a.exchange]} · ${kindName[a.kind]}</p><h2>${esc(a.name)}</h2></div><span class="badge ${a.auto ? "good" : a.kind === "live" ? "live" : ""}">${a.auto ? "自动交易运行中" : "已暂停"}</span></div><div class="account-numbers"><div><small>${a.kind === "paper" ? "模拟权益" : "账户权益"} / USDT</small><strong>${fmt(s.equity)}</strong></div><div><small>可用资金</small><strong>${fmt(s.available)}</strong></div><div><small>浮动盈亏</small><strong class="${Number(s.unrealized) >= 0 ? "positive" : "negative"}">${fmt(s.unrealized)}</strong></div></div><p class="account-state">${a.kind === "paper" ? "已启用品种：" + (a.sizing.map((x) => state.watchlist.find((i) => i.id === x.instrument_id)?.label || x.instrument_id).join("、") || "未选择") : "授权交易对：" + (a.allowed.map((id) => state.watchlist.find((i) => i.id === id)?.label || id).join("、") || "未选择")}<br>${(a.sizing.some((x) => !x.quantity) || !a.sizing.length ? '<span class="negative">请先填写交易对币数量，再启用自动交易。</span><br>' : "") + esc(a.execution.reason)}${a.last_error ? '<br><span class="negative">' + esc(a.last_error) + "</span>" : ""}</p><p class="fine">持仓 AI 评估：${a.position_review_enabled ? "已启用 · 每 " + a.position_review_interval + " 秒 · " + esc(a.position_review?.message || "等待评估") : "关闭"}</p><div class="account-actions"><button class="${a.auto ? "secondary" : "primary"}" data-toggle-account="${a.id}">${a.auto ? "暂停自动交易" : "启用自动交易"}</button><button class="secondary" data-edit-account="${a.id}">账户设置</button>${a.kind === "paper" ? `<button class="text-button" data-reset-account="${a.id}">重置模拟资金</button>` : `<button class="secondary" data-account-key="${a.id}">API 密钥</button><button class="text-button" data-check-account="${a.id}">读取与核对</button>`}<button class="text-button negative" data-delete-account="${a.id}">删除账户</button></div></article>`;
+        return `<article class="card account-card"><div class="card-head"><div><p class="eyebrow">${exchangeName[a.exchange]} · ${kindName[a.kind]}</p><h2>${esc(a.name)}</h2></div><span class="badge ${a.auto ? "good" : a.kind === "live" ? "live" : ""}">${a.auto ? "自动交易运行中" : "已暂停"}</span></div><div class="account-numbers"><div><small>${a.kind === "paper" ? "模拟权益" : "账户权益"} / USDT</small><strong>${fmt(s.equity)}</strong></div><div><small>可用资金</small><strong>${fmt(s.available)}</strong></div><div><small>浮动盈亏</small><strong class="${Number(s.unrealized) >= 0 ? "positive" : "negative"}">${fmt(s.unrealized)}</strong></div></div><p class="account-state">${a.kind === "paper" ? "已启用品种：" + (a.sizing.map((x) => state.watchlist.find((i) => i.id === x.instrument_id)?.label || x.instrument_id).join("、") || "未选择") : "授权交易对：" + (a.allowed.map((id) => state.watchlist.find((i) => i.id === id)?.label || id).join("、") || "未选择")}<br>${(a.sizing.some((x) => x.mode !== "system" && !x.quantity) || !a.sizing.length ? '<span class="negative">请填写币数量或选择由系统评估，再启用自动交易。</span><br>' : "") + esc(a.execution.reason)}${a.last_error ? '<br><span class="negative">' + esc(a.last_error) + "</span>" : ""}</p><p class="fine">交易前 AI 审核：${a.ai_action_enabled ? "已启用 · 行情共享 / 账户风险独立" : "关闭"}</p><p class="fine">持仓 AI 评估：${a.position_review_enabled ? "已启用 · 每 " + a.position_review_interval + " 秒 · " + esc(a.position_review?.message || "等待评估") : "关闭"}</p><div class="account-actions"><button class="${a.auto ? "secondary" : "primary"}" data-toggle-account="${a.id}">${a.auto ? "暂停自动交易" : "启用自动交易"}</button><button class="secondary" data-edit-account="${a.id}">账户设置</button>${a.kind === "paper" ? `<button class="text-button" data-reset-account="${a.id}">重置模拟资金</button>` : `<button class="secondary" data-account-key="${a.id}">API 密钥</button><button class="text-button" data-check-account="${a.id}">读取与核对</button>`}<button class="text-button negative" data-delete-account="${a.id}">删除账户</button></div></article>`;
       })
       .join("") ||
     '<div class="card empty">尚无账户。点击“添加账户”创建模拟或交易所账户。</div>';
@@ -836,7 +837,7 @@ function editAccount(a) {
       .map((x) => `<option value="${x}">${exchangeName[x]}</option>`)
       .join(
         "",
-      )}</select></label><label id="paperCapital">初始模拟资金 / USDT<input name="capital" type="number" min="100" max="100000000" step="any" value="${a?.capital || 10000}" ${a ? "disabled" : ""}></label></div><p id="accountKindHint" class="notice-box"></p><fieldset class="position-review-settings"><legend>现有仓位 AI 定期评估</legend><label class="check"><input type="checkbox" name="positionReview" ${a?.position_review_enabled ? "checked" : ""}>启用此账户的持仓 AI 评估</label><label>持仓评估间隔（秒）<input type="number" name="positionInterval" min="60" max="86400" step="1" value="${a?.position_review_interval || 300}" required></label><p class="fine">独立于交易前审核，对本平台管理的现有仓位评估止盈、止损和加减仓点位。加仓仍须账户自动交易和该交易对已启用；未落定时不新增加仓计划，既有保护继续。会消耗当前 AI 连接额度。</p><div class="position-review-options"><label class="check"><input type="checkbox" name="profitTrailing" ${a?.profit_trailing_enabled ? "checked" : ""}>盈利移动止损 · 由持仓 AI 评估决定</label><p class="fine">盈利空间足以覆盖估算手续费和滑点时，AI 可设置并移动保护浮盈的止损。止损只向降低回撤的方向移动；不保证获得最大利润。</p><label class="check"><input type="checkbox" name="aiTakeProfit" ${a?.ai_take_profit_enabled ? "checked" : ""}>允许 AI 决定是否分批止盈</label><p class="fine">需此持仓的第一、第二档止盈均已启用。AI 可选择第一档一次止盈，或两档止盈并调整比例；已执行止盈批次不重新分配。两项功能均依赖持仓 AI 评估。</p></div></fieldset><h3>逐交易对设置</h3><p class="muted small">仓位填写标的数量，例如 0.01 BTC。杠杆与逐仓 / 全仓独立设置，风险偏好仍控制亏损及总敞口。未配置的品种不会自动开仓。</p><div id="sizingRows"></div><div class="dialog-footer"><button type="button" id="cancelAccount" class="secondary">取消</button><button class="primary">保存账户设置</button></div></form>`,
+      )}</select></label><label id="paperCapital">初始模拟资金 / USDT<input name="capital" type="number" min="100" max="100000000" step="any" value="${a?.capital || 10000}" ${a ? "disabled" : ""}></label></div><p id="accountKindHint" class="notice-box"></p><fieldset class="position-review-settings"><legend>每次交易前 AI 审核（账户独立）</legend><label class="check"><input type="checkbox" name="actionReview" ${a?.ai_action_enabled ? "checked" : ""}>启用此账户的交易前 AI 审核</label><p class="fine">只审核本账户已启用的交易对。同一交易所、同一交易对的行情与点位结论共用，各账户资金、强平风险独立审核。Telegram 会分别报告各账户是否获准及成交状态。</p><p class="fine">当前共用评估周期 ${state.preferences.evaluation_interval} 秒，价格重审阈值 ${state.preferences.ai_reaudit_threshold_pct}%。在「数据与 AI」中统一调整。AI 超时或不可用时暂停开仓、加仓；既有止盈止损保护继续。</p></fieldset><fieldset class="position-review-settings"><legend>现有仓位 AI 定期评估</legend><label class="check"><input type="checkbox" name="positionReview" ${a?.position_review_enabled ? "checked" : ""}>启用此账户的持仓 AI 评估</label><label>持仓评估间隔（秒）<input type="number" name="positionInterval" min="60" max="86400" step="1" value="${a?.position_review_interval || 300}" required></label><p class="fine">独立于交易前审核，对本平台管理的现有仓位评估止盈、止损和加减仓点位。加仓仍须账户自动交易和该交易对已启用；未落定时不新增加仓计划，既有保护继续。会消耗当前 AI 连接额度。</p><div class="position-review-options"><label class="check"><input type="checkbox" name="profitTrailing" ${a?.profit_trailing_enabled ? "checked" : ""}>盈利移动止损 · 由持仓 AI 评估决定</label><p class="fine">盈利空间足以覆盖估算手续费和滑点时，AI 可设置并移动保护浮盈的止损。止损只向降低回撤的方向移动；不保证获得最大利润。</p><label class="check"><input type="checkbox" name="aiTakeProfit" ${a?.ai_take_profit_enabled ? "checked" : ""}>允许 AI 决定是否分批止盈</label><p class="fine">需此持仓的第一、第二档止盈均已启用。AI 可选择第一档一次止盈，或两档止盈并调整比例；已执行止盈批次不重新分配。两项功能均依赖持仓 AI 评估。</p></div></fieldset><h3>逐交易对设置</h3><p class="muted small">可填写标的数量（例如 0.01 BTC），或选择由系统评估。杠杆与逐仓 / 全仓独立设置，风险偏好仍控制亏损及总敞口。未配置的品种不会自动开仓。</p><div id="sizingRows"></div><div class="dialog-footer"><button type="button" id="cancelAccount" class="secondary">取消</button><button class="primary">保存账户设置</button></div></form>`,
   );
   const f = $("accountForm"),
     drafts = new Map();
@@ -856,6 +857,7 @@ function editAccount(a) {
       drafts.set(r.dataset.sizeId, {
         checked: r.querySelector(".allowed").checked,
         mode: r.querySelector(".size-mode").value,
+        system_level: r.querySelector(".size-level").value,
         quantity: r.querySelector(".size-quantity").value,
         leverage: r.querySelector(".size-leverage").value,
         margin_mode: r.querySelector(".size-margin-mode").value,
@@ -883,6 +885,7 @@ function editAccount(a) {
           const d = drafts.get(i.id) || {
             checked: !!setting || !!a?.allowed.includes(i.id),
             mode: setting?.mode || "maximum",
+            system_level: setting?.system_level || "balanced",
             quantity: setting?.quantity ?? "",
             leverage: setting?.leverage || 1,
             margin_mode: setting?.margin_mode || "isolated",
@@ -899,7 +902,7 @@ function editAccount(a) {
           );
           if (held)
             d.margin_mode = held.margin_mode || held.marginMode || "isolated";
-          return `<div class="sizing-row" data-size-id="${i.id}"><label class="check"><input type="checkbox" class="allowed" ${d.checked ? "checked" : ""}><b>${esc(i.label)}</b><span class="muted small">${esc(i.symbol)} · ${paper ? "启用此交易对" : "授权自动交易"}</span></label><details ${d.open ? "open" : ""}><summary>数量、保证金、杠杆与加仓</summary><div class="sizing-grid"><label>仓位模式<select class="size-mode"><option value="maximum" ${d.mode === "maximum" ? "selected" : ""}>最大总持仓数量</option><option value="fixed" ${d.mode === "fixed" ? "selected" : ""}>固定首次开仓数量</option></select></label><label>标的数量 / ${esc(unit)}<input class="size-quantity" type="number" min="0.00000001" max="1000000000" step="any" required value="${esc(d.quantity)}" placeholder="填写 ${esc(unit)} 数量"></label><label>保证金模式<select class="size-margin-mode" ${held ? 'data-held="true"' : ""}><option value="isolated" ${d.margin_mode === "isolated" ? "selected" : ""}>逐仓 · 保证金独立</option><option value="cross" ${d.margin_mode === "cross" ? "selected" : ""}>全仓 · 共享账户保证金</option></select><small class="margin-mode-note">${held ? "当前有持仓，平仓后才能切换模式。" : "仅此交易对生效；已有仓位不自动转换。"}</small></label><label>此交易对杠杆 / 倍<input class="size-leverage" type="number" min="1" max="1000" step="1" required value="${esc(d.leverage)}"></label><div class="limit-control"><button type="button" class="secondary load-limits">读取交易所上限</button><small class="limit-note">尚未核验。高于 1 倍必须通过服务器校验。</small></div><label>最多加仓次数<input class="size-adds" type="number" min="0" max="5" step="1" value="${esc(d.count)}" placeholder="留空：系统评估；0：不加仓"></label><label>每次加仓比例 / %<input class="size-ratios" value="${esc(d.ratios)}" placeholder="例如 25, 20" inputmode="decimal"></label></div><p class="sizing-help"><b>逐仓</b>：只使用分配给该仓位的保证金。<b>全仓</b>：同一账户的全仓仓位共享 USDT 保证金，其他仓位盈亏会影响强平线；逐仓占用资金不参与共享。模拟采用统一费率估算，不等于所选交易所的实际强平价。<br>固定：每次初始开仓按填写数量，风控额度不足则不下单。最大：初始仓位由系统评估，后续加仓也不超过此总数量。<br><b>25, 20</b> 表示两次分别加「初始开仓数量」的 25% 和 20%。例如初始 0.01 BTC，对应 0.0025、0.002 BTC。不是剩余仓位的比例。次数和比例都留空时系统评估；只填次数时每次上限为初始数量的 25%；填 0 禁止加仓。</p></details></div>`;
+          return `<div class="sizing-row" data-size-id="${i.id}"><label class="check"><input type="checkbox" class="allowed" ${d.checked ? "checked" : ""}><b>${esc(i.label)}</b><span class="muted small">${esc(i.symbol)} · ${paper ? "启用此交易对" : "授权自动交易"}</span></label><details ${d.open ? "open" : ""}><summary>数量、保证金、杠杆与加仓</summary><div class="sizing-grid"><label>仓位模式<select class="size-mode"><option value="maximum" ${d.mode === "maximum" ? "selected" : ""}>最大总持仓数量</option><option value="fixed" ${d.mode === "fixed" ? "selected" : ""}>固定首次开仓数量</option><option value="system" ${d.mode === "system" ? "selected" : ""}>由系统评估</option></select></label><label class="system-level-label">资金使用偏好<select class="size-level"><option value="conservative" ${d.system_level === "conservative" ? "selected" : ""}>保守 · 预留更多资金</option><option value="balanced" ${d.system_level === "balanced" ? "selected" : ""}>平衡 · 均衡利用资金</option><option value="aggressive" ${d.system_level === "aggressive" ? "selected" : ""}>激进 · 提高资金利用</option></select></label><label class="quantity-label">标的数量 / ${esc(unit)}<input class="size-quantity" type="number" min="0.00000001" max="1000000000" step="any" required value="${esc(d.quantity)}" placeholder="填写 ${esc(unit)} 数量"></label><label>保证金模式<select class="size-margin-mode" ${held ? 'data-held="true"' : ""}><option value="isolated" ${d.margin_mode === "isolated" ? "selected" : ""}>逐仓 · 保证金独立</option><option value="cross" ${d.margin_mode === "cross" ? "selected" : ""}>全仓 · 共享账户保证金</option></select><small class="margin-mode-note">${held ? "当前有持仓，平仓后才能切换模式。" : "仅此交易对生效；已有仓位不自动转换。"}</small></label><label>此交易对杠杆 / 倍<input class="size-leverage" type="number" min="1" max="1000" step="1" required value="${esc(d.leverage)}"></label><div class="limit-control"><button type="button" class="secondary load-limits">读取交易所上限</button><small class="limit-note">尚未核验。高于 1 倍必须通过服务器校验。</small></div><label>最多加仓次数<input class="size-adds" type="number" min="0" max="5" step="1" value="${esc(d.count)}" placeholder="留空：系统评估；0：不加仓"></label><label>每次加仓比例 / %<input class="size-ratios" value="${esc(d.ratios)}" placeholder="例如 25, 20" inputmode="decimal"></label></div><p class="sizing-help"><b>逐仓</b>：只使用分配给该仓位的保证金。<b>全仓</b>：同一账户的全仓仓位共享 USDT 保证金，其他仓位盈亏会影响强平线；逐仓占用资金不参与共享。模拟采用统一费率估算，不等于所选交易所的实际强平价。<br>固定：每次初始开仓按填写数量，风控额度不足则不下单。最大：初始仓位由系统评估，后续加仓也不超过此总数量。<br><b>由系统评估</b>：无需填写币数量。保守 / 平衡 / 激进分别以可用资金的 20% / 40% / 70% 作为本次保证金及开仓费预算上限；止损风险预算分别为当前风险偏好额度的 50% / 75% / 100%。还需通过强平距离、相关敞口及总风险限制，实际用量可能更低。计划加仓时预留额度。<br><b>25, 20</b> 表示两次分别加「初始开仓数量」的 25% 和 20%。例如初始 0.01 BTC，对应 0.0025、0.002 BTC。不是剩余仓位的比例。次数和比例都留空时系统评估；只填次数时每次上限为初始数量的 25%；填 0 禁止加仓。</p></details></div>`;
         })
         .join("") ||
       '<p class="empty">此交易所尚无监测品种，请先在监测列表添加。</p>';
@@ -909,11 +912,18 @@ function editAccount(a) {
         r.querySelectorAll(
           ".sizing-grid input,.sizing-grid select,.load-limits",
         ).forEach((x) => (x.disabled = !yes));
+        const system = r.querySelector(".size-mode").value === "system";
+        r.querySelector(".quantity-label").hidden = system;
+        r.querySelector(".size-quantity").disabled = !yes || system;
+        r.querySelector(".size-quantity").required = yes && !system;
+        r.querySelector(".system-level-label").hidden = !system;
+        r.querySelector(".size-level").disabled = !yes || !system;
         if (r.querySelector(".size-margin-mode").dataset.held)
           r.querySelector(".size-margin-mode").disabled = true;
         if (yes) r.querySelector("details").open = true;
       };
       r.querySelector(".allowed").onchange = update;
+      r.querySelector(".size-mode").onchange = update;
       update();
       r.querySelector(".load-limits").onclick = () =>
         action(async () => {
@@ -960,7 +970,11 @@ function editAccount(a) {
         sizing.push({
           instrument_id: r.dataset.sizeId,
           mode: r.querySelector(".size-mode").value,
-          quantity: Number(r.querySelector(".size-quantity").value),
+          quantity:
+            r.querySelector(".size-mode").value === "system"
+              ? null
+              : Number(r.querySelector(".size-quantity").value),
+          system_level: r.querySelector(".size-level").value,
           leverage: Number(r.querySelector(".size-leverage").value),
           margin_mode: r.querySelector(".size-margin-mode").value,
           add_count: count === "" ? null : Number(count),
@@ -974,6 +988,7 @@ function editAccount(a) {
         exchange: f.exchange.value,
         capital: f.kind.value === "paper" ? Number(f.capital.value) : null,
         auto: a?.auto || false,
+        ai_action_enabled: f.actionReview.checked,
         position_review_enabled: f.positionReview.checked,
         position_review_interval: Number(f.positionInterval.value),
         profit_trailing_enabled: f.profitTrailing.checked,
@@ -1448,7 +1463,6 @@ function fillSettings() {
   f.interval.value = state.preferences.ai_interval;
   f.enabled.checked = state.preferences.ai_enabled;
   f.intervene.checked = state.preferences.ai_intervene;
-  f.actionReview.checked = state.preferences.ai_action_enabled;
   f.evaluationInterval.value = state.preferences.evaluation_interval ?? 30;
   f.reauditThreshold.value = state.preferences.ai_reaudit_threshold_pct ?? 0.3;
   $("aiDataForm").enabled.checked = state.preferences.ai_data_enabled;
@@ -1510,7 +1524,7 @@ function renderAIDataStatus() {
     .slice(-6)
     .map(
       (d) =>
-        `<p>${esc(state.watchlist.find((i) => i.id === d.instrument_id)?.label || d.instrument_id)} · ${esc(d.action)} · ${{ pending: "审核中", ready: "已返回决策", error: "审核不可用" }[d.state] || esc(d.state)}${d.reason ? " · " + esc(d.reason) : ""}</p>`,
+        `<p>${esc(state.accounts.find((a) => a.id === d.account_id)?.name || "共享交易对")} · ${esc(state.watchlist.find((i) => i.id === d.instrument_id)?.label || d.instrument_id)} · ${esc(d.action)} · ${{ pending: "审核中", ready: "已返回决策", error: "审核不可用" }[d.state] || esc(d.state)}${d.reason ? " · " + esc(d.reason) : ""}</p>`,
     )
     .join("");
 }
@@ -1567,7 +1581,6 @@ $("aiForm").onsubmit = (e) => {
         ai_interval: Number(f.interval.value),
         ai_enabled: f.enabled.checked,
         ai_intervene: f.intervene.checked,
-        ai_action_enabled: f.actionReview.checked,
         evaluation_interval: Number(f.evaluationInterval.value),
         ai_reaudit_threshold_pct: Number(f.reauditThreshold.value),
       },

@@ -84,7 +84,7 @@ class ExchangeBroker:
                 "cross_margin",
             )
             ready = (
-                cert["version"] == "0.9.0"
+                cert["version"] == "0.10.0"
                 and cert["exchange"] == account["exchange"]
                 and cert["credential_fingerprint"] == fingerprint
                 and all(cert["checks"].get(k) is True for k in required)
@@ -129,6 +129,8 @@ class ExchangeBroker:
                         "marginMode",
                         "hedged",
                         "initialMargin",
+                        "maintenanceMargin",
+                        "maintenanceMarginPercentage",
                     )
                 }
             )
@@ -188,6 +190,10 @@ class ExchangeBroker:
         client = self.client(account)
         with self.locks[aid]:
             snapshot = self.read(account)
+            with self.store.transaction() as db:
+                external = self.store.read(db, "v2_external")
+                external[aid] = snapshot
+                self.store.write(db, "v2_external", external)
             mode = (
                 {"hedged": client.privateFuturesGetSettleAccounts({"settle": "usdt"}).get("in_dual_mode")}
                 if account["exchange"] == "gate"
@@ -238,6 +244,8 @@ class ExchangeBroker:
             sizing = size_order(
                 account, book, opportunity, quotes, instruments, profile, time.time(), adding, min_score
             )
+            if getattr(self, "action_review", None):
+                self.action_review.check_size(opportunity, sizing)
             client.load_markets()
             market = client.market(item["symbol"])
             if not market.get("linear") or not market.get("swap") or market.get("settle") != "USDT":

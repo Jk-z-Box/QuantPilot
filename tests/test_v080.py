@@ -12,10 +12,15 @@ from quantpilot.v2.notifications import NotificationSettings, opportunity_messag
 from quantpilot.v2.position_review import position_guard
 
 
-def ai(workspace, monkeypatch, enabled=True):
+def ai(workspace, monkeypatch, account, enabled=True):
     workspace.vault.put("v2:ai:openai", {"apiKey": "test-only"})
     workspace.preferences(
-        {**workspace.store.get("v2_preferences"), "ai_model": "test-model", "ai_action_enabled": enabled}
+        {**workspace.store.get("v2_preferences"), "ai_model": "test-model", "ai_action_enabled": False}
+    )
+    account.update(workspace.save_account({**account, "ai_action_enabled": enabled}))
+    # Market sharing has separate integration tests; preserve account-stage cadence assertions.
+    monkeypatch.setattr(
+        workspace.action_review.market, "inspect", lambda op, q, p: {"state": "approved", "opportunity": op}
     )
     callbacks = []
     monkeypatch.setattr(
@@ -77,7 +82,7 @@ def test_evaluation_uses_shared_interval(workspace, monkeypatch):
 
 
 def test_disabled_pair_does_not_request_ai(workspace, account, opportunity, quote, monkeypatch):
-    callbacks = ai(workspace, monkeypatch)
+    callbacks = ai(workspace, monkeypatch, account)
     with pytest.raises(ValueError, match="未在此账户启用"):
         workspace.action_review.inspect(
             account["id"], "eth", "open", quote, {**opportunity, "instrument_id": "eth"}
@@ -87,7 +92,7 @@ def test_disabled_pair_does_not_request_ai(workspace, account, opportunity, quot
 
 
 def test_pair_filter_before_broker(workspace, account, opportunity, quote, monkeypatch):
-    ai(workspace, monkeypatch)
+    ai(workspace, monkeypatch, account)
     workspace.opportunities = {"eth": {**opportunity, "instrument_id": "eth", "min_score": 80}}
     workspace.quotes = {"eth": quote}
     monkeypatch.setattr(workspace.paper, "enter", lambda *args: pytest.fail("disabled pair reached broker"))
@@ -95,7 +100,7 @@ def test_pair_filter_before_broker(workspace, account, opportunity, quote, monke
 
 
 def test_shared_cadence_prevents_plan_change_spam(workspace, account, opportunity, quote, monkeypatch):
-    jobs = ai(workspace, monkeypatch)
+    jobs = ai(workspace, monkeypatch, account)
     g = workspace.action_review
     assert g.inspect(account["id"], "btc", "open", quote, opportunity)["state"] == "pending"
     changed = copy.deepcopy(opportunity)
@@ -111,7 +116,7 @@ def test_shared_cadence_prevents_plan_change_spam(workspace, account, opportunit
 
 
 def test_custom_threshold_and_result_lifetime(workspace, account, opportunity, quote, monkeypatch):
-    jobs = ai(workspace, monkeypatch)
+    jobs = ai(workspace, monkeypatch, account)
     workspace.preferences(
         {**workspace.store.get("v2_preferences"), "evaluation_interval": 90, "ai_reaudit_threshold_pct": 1}
     )
@@ -130,7 +135,7 @@ def test_custom_threshold_and_result_lifetime(workspace, account, opportunity, q
 
 def test_executed_signal_does_not_reaudit(workspace, account, opportunity, quote, monkeypatch):
     enter(workspace, account, opportunity, quote)
-    jobs = ai(workspace, monkeypatch)
+    jobs = ai(workspace, monkeypatch, account)
     assert enter(workspace, account, opportunity, quote)["status"] == "duplicate"
     assert not jobs
 
@@ -163,7 +168,7 @@ def prepare_position(workspace, account, opportunity, quote, monkeypatch):
     account = workspace.save_account(
         {**account, "position_review_enabled": True, "position_review_interval": 60}
     )
-    ai(workspace, monkeypatch, enabled=False)
+    ai(workspace, monkeypatch, account, enabled=False)
     workspace.quotes = {"btc": quote}
     workspace.opportunities = {"btc": opportunity}
     proposal = {

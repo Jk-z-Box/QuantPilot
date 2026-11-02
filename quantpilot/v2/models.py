@@ -89,7 +89,6 @@ POLICY_KEYS = (
     "ai_model",
     "ai_intervene",
     "ai_data_enabled",
-    "ai_action_enabled",
     "evaluation_interval",
     "ai_reaudit_threshold_pct",
 )
@@ -106,8 +105,9 @@ def policy_matches(opportunity, preferences):
 
 class Sizing(Model):
     instrument_id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,64}$")
-    mode: Literal["fixed", "maximum"] = "maximum"
+    mode: Literal["fixed", "maximum", "system"] = "maximum"
     quantity: float | None = Field(default=None, gt=0, le=1000000000)
+    system_level: Literal["conservative", "balanced", "aggressive"] = "balanced"
     leverage: int = Field(default=1, ge=1, le=1000)
     margin_mode: Literal["isolated", "cross"] = "isolated"
     add_count: int | None = Field(default=None, ge=0, le=5)
@@ -129,6 +129,7 @@ class Account(Model):
     exchange: Literal["binance", "okx", "gate"] = "binance"
     capital: float | None = Field(default=None, ge=100, le=100000000)
     auto: bool = False
+    ai_action_enabled: bool = False
     position_review_enabled: bool = False
     position_review_interval: int = Field(default=300, ge=60, le=86400, strict=True)
     profit_trailing_enabled: bool = False
@@ -150,8 +151,10 @@ class Account(Model):
             raise ValueError("交易对不可重复")
         if self.kind != "paper" and not set(ids) <= set(self.allowed):
             raise ValueError("仓位设置只允许已授权交易对")
-        if self.auto and (not self.sizing or any(s.quantity is None for s in self.sizing)):
-            raise ValueError("请先设置交易对的币数量，再启用自动交易")
+        if self.auto and (
+            not self.sizing or any(s.quantity is None and s.mode != "system" for s in self.sizing)
+        ):
+            raise ValueError("请设置币数量或选择由系统评估，再启用自动交易")
         if self.auto and self.kind != "paper" and set(ids) != set(self.allowed):
             raise ValueError("每个授权交易对都需要设置仓位数量")
         return self
@@ -199,6 +202,7 @@ class Evidence(Model):
 
 
 def pair_enabled(account, key):
-    return any(s["instrument_id"] == key and s.get("quantity") for s in account.get("sizing", [])) and (
-        account["kind"] == "paper" or key in account.get("allowed", [])
-    )
+    return any(
+        s["instrument_id"] == key and (s.get("mode") == "system" or s.get("quantity"))
+        for s in account.get("sizing", [])
+    ) and (account["kind"] == "paper" or key in account.get("allowed", []))

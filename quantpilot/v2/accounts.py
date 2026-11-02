@@ -8,7 +8,7 @@ import time
 
 from ..market import decimal as D
 from .logic import check_version
-from .margin import estimates, mode
+from .margin import CLOSE_FEE_RATE, MAINTENANCE_RATE, estimates, mode
 from .models import PROFILES, pair_enabled, policy_matches
 from .notifications import trade_event
 from .position_changes import levels, position_guard, record_changes
@@ -16,6 +16,11 @@ from .rules import effective
 
 FEE = D(".0005")
 SLIP = D(".0002")
+SYSTEM_LEVELS = {
+    "conservative": {"margin_fraction": D(".20"), "risk_factor": D(".50")},
+    "balanced": {"margin_fraction": D(".40"), "risk_factor": D(".75")},
+    "aggressive": {"margin_fraction": D(".70"), "risk_factor": D("1")},
+}
 
 
 def ledger(capital):
@@ -136,8 +141,14 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
     if not adding and not D(plan["entry_low"]) * D(".999") <= price <= D(plan["entry_high"]) * D("1.001"):
         raise ValueError("价格已离开入场区间")
     sizing = next((s for s in account["sizing"] if s["instrument_id"] == key), None)
-    if not sizing or not sizing.get("quantity"):
+    if not sizing or (sizing.get("mode") != "system" and not sizing.get("quantity")):
         raise ValueError("请先为此交易对设置币数量和杠杆")
+    system = sizing["mode"] == "system"
+    tier = (
+        SYSTEM_LEVELS[sizing.get("system_level", "balanced")]
+        if system
+        else {"margin_fraction": D(".95"), "risk_factor": D(1)}
+    )
     leverage = sizing["leverage"]
     old = book["positions"].get(key)
     margin_mode = mode(sizing)
@@ -154,7 +165,9 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
     add_count = sizing["add_count"] if sizing["add_count"] is not None else rule["adds"]
     ratios = sizing["add_ratios"] or [parameters["add_default_ratio"]] * add_count
     cap = (
-        D(sizing["quantity"]) * (1 + sum(map(D, ratios)))
+        None
+        if system
+        else D(sizing["quantity"]) * (1 + sum(map(D, ratios)))
         if sizing["mode"] == "fixed"
         else D(sizing["quantity"])
     )
@@ -164,22 +177,25 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
         for p in book["positions"].values()
     )
     risk_budget = max(D(0), equity * D(rule["risk"]) * D(parameters["portfolio_risk_multiple"]) - risk_used)
-    risk_amount = min(equity * D(rule["risk"]), risk_budget) / (distance / price + 2 * FEE + 2 * SLIP)
+    risk_amount = min(equity * D(rule["risk"]) * tier["risk_factor"], risk_budget) / (
+        distance / price + 2 * FEE + 2 * SLIP
+    )
     correlated = sum(
         D(p["qty"]) * D(quotes.get(k, {}).get("mid", p["entry"]))
         for k, p in book["positions"].items()
         if instruments.get(k, {}).get("group") == item["group"]
     )
     headroom = min(
-        (cap - existing) * price,
-        equity * D(rule["exposure"]) - D(snap["exposure"]),
-        equity * D(rule["exposure"]) * D(parameters["group_exposure_fraction"]) - correlated,
-        free * leverage * D(".95"),
+        (cap - existing) * price if cap is not None else equity * D(rule["exposure"]),
+        equity * D(rule["exposure"]) * tier["risk_factor"] - D(snap["exposure"]),
+        equity * D(rule["exposure"]) * tier["risk_factor"] * D(parameters["group_exposure_fraction"])
+        - correlated,
+        free * tier["margin_fraction"] / (1 / D(leverage) + FEE),
         risk_amount,
     )
     # Reserve room for planned additions when the user sets a total maximum.
-    target = D(sizing["quantity"]) * price
-    if sizing["mode"] == "maximum" and ratios:
+    target = headroom if system else D(sizing["quantity"]) * price
+    if sizing["mode"] in ("maximum", "system") and ratios:
         target /= 1 + sum(map(D, ratios))
     if adding:
         if (
@@ -208,26 +224,45 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
         if sizing["mode"] == "fixed"
         else (amount / price).quantize(D(".00000001"), rounding="ROUND_DOWN")
     )
-    projected = copy.deepcopy(book)
-    projected.pop("source", None)
-    projected["cash"] = str(D(book["cash"]) - qty * price * FEE)
-    total = qty + existing
-    position = {
-        "side": side,
-        "qty": str(total),
-        "entry": str((price * qty + (D(old["entry"]) * existing if old else 0)) / total),
-        "margin": str(qty * price / leverage + (D(old["margin"]) if old else 0)),
-        "margin_mode": margin_mode,
-    }
-    projected["positions"][key] = position
-    marks = {
-        k: D(quotes[k]["bid"] if p["side"] == "long" else quotes[k]["ask"])
-        for k, p in projected["positions"].items()
-    }
-    liquidation = estimates(projected, marks)[key]
-    sign = 1 if side == "long" else -1
-    if liquidation is not None and (stop - liquidation) * sign / price < D(".03"):
-        raise ValueError("止损距离预估强平线过近")
+
+    def projected_risk(quantity):
+        projected = copy.deepcopy(book)
+        projected.pop("source", None)
+        projected["cash"] = str(D(book["cash"]) - quantity * price * FEE)
+        total = quantity + existing
+        position = {
+            "side": side,
+            "qty": str(total),
+            "entry": str((price * quantity + (D(old["entry"]) * existing if old else 0)) / total),
+            "margin": str(quantity * price / leverage + (D(old["margin"]) if old else 0)),
+            "margin_mode": margin_mode,
+        }
+        projected["positions"][key] = position
+        marks = {
+            k: D(quotes[k]["bid"] if p["side"] == "long" else quotes[k]["ask"])
+            for k, p in projected["positions"].items()
+        }
+        liq = estimates(projected, marks)[key]
+        gap = (stop - liq) * (1 if side == "long" else -1) / price if liq is not None else None
+        return liq, gap
+
+    liquidation, gap = projected_risk(qty)
+    if gap is not None and gap < D(".03"):
+        if system and margin_mode == "cross":
+            low, high = D(0), qty
+            for _ in range(40):
+                mid = (low + high) / 2
+                _, trial = projected_risk(mid)
+                if trial is None or trial >= D(".03"):
+                    low = mid
+                else:
+                    high = mid
+            qty = low.quantize(D(".00000001"), rounding="ROUND_DOWN")
+            if qty * price < 5:
+                raise ValueError("强平风险约束下没有足够的可开仓数量")
+            liquidation, gap = projected_risk(qty)
+        if gap is not None and gap < D(".03"):
+            raise ValueError("止损距离预估强平线过近")
     return {
         "notional": qty * price,
         "qty": qty,
@@ -236,6 +271,26 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
         "leverage": leverage,
         "margin_mode": margin_mode,
         "liquidation": str(liquidation) if liquidation is not None else None,
+        "risk": {
+            "account_equity": str(equity),
+            "available_before": str(free),
+            "initial_margin": str(qty * price / leverage),
+            "estimated_entry_fee": str(qty * price * FEE),
+            "available_after": str(free - qty * price / leverage - qty * price * FEE),
+            "estimated_loss_at_stop": str(qty * (distance + price * (2 * FEE + 2 * SLIP))),
+            "existing_exposure": str(snap["exposure"]),
+            "correlated_exposure": str(correlated),
+            "maintenance_rate_estimate": str(MAINTENANCE_RATE),
+            "close_fee_rate_estimate": str(CLOSE_FEE_RATE),
+            "maintenance_margin_estimate": str((qty + existing) * price * MAINTENANCE_RATE),
+            "stop_to_liquidation_pct": float(gap * 100) if gap is not None else None,
+            "minimum_stop_to_liquidation_pct": 3,
+            "liquidation_status": "estimated" if liquidation is not None else "no_positive_price",
+            "model": "USDT linear approximation; other position prices held constant; not exchange risk-tier certification",
+            "sizing_mode": sizing["mode"],
+            "system_level": sizing.get("system_level") if system else None,
+            "available_margin_budget_fraction": float(tier["margin_fraction"]),
+        },
     }
 
 
@@ -256,7 +311,7 @@ class PaperBroker:
         now, aid, key = time.time(), account["id"], opportunity["instrument_id"]
         if not pair_enabled(account, key):
             raise ValueError("交易对未在此账户启用")
-        if self.action_review and self.store.get("v2_preferences")["ai_action_enabled"]:
+        if self.action_review and account.get("ai_action_enabled"):
             with self.store.connect() as db:
                 book = self.store.read(db, "v2_ledgers")[aid]
                 old = book["positions"].get(key)
@@ -309,6 +364,8 @@ class PaperBroker:
             sizing = size_order(
                 account, book, opportunity, quotes, instruments, profile, now, adding, prefs["min_score"]
             )
+            if self.action_review:
+                self.action_review.check_size(opportunity, sizing)
             qty, price = sizing["qty"], sizing["price"]
             fee = qty * price * FEE
             book["cash"] = str(D(book["cash"]) - fee)

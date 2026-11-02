@@ -14,6 +14,7 @@ from .ai_client import fingerprint, ready
 from .ai_errors import AIError
 from .chatgpt import ChatGPTConnection
 from .codex_client import CodexConnection
+from .entry_status import report as entry_report
 from .execution import ExchangeBroker
 from .feeds import Feeds
 from .history import History
@@ -57,12 +58,16 @@ class Workspace:
                 "v2_evidence": [],
                 "v2_archived_accounts": {},
                 "v2_sizing_migration": {},
+                "v2_entry_status": {},
             }
             for key, value in initial.items():
                 db.execute("INSERT OR IGNORE INTO kv VALUES (?,?)", (key, json.dumps(value)))
             prefs = {**Preferences().model_dump(), **self.store.read(db, "v2_preferences")}
             self.store.write(db, "v2_preferences", Preferences.model_validate(prefs).model_dump())
             accounts = self.store.read(db, "v2_accounts")
+            legacy_action_review = prefs.get("ai_action_enabled", False)
+            prefs["ai_action_enabled"] = False
+            self.store.write(db, "v2_preferences", prefs)
             migrated = self.store.read(db, "v2_sizing_migration")
             for aid, account in accounts.items():
                 if "leverage" in account or any("notional" in s for s in account["sizing"]):
@@ -73,6 +78,7 @@ class Workspace:
                         sizing.setdefault("quantity", None)
                         sizing.setdefault("leverage", leverage)
                     account["auto"] = False
+                account.setdefault("ai_action_enabled", legacy_action_review)
                 for sizing in account["sizing"]:
                     sizing.setdefault("margin_mode", "isolated")
                 if account["kind"] != "paper":
@@ -126,6 +132,7 @@ class Workspace:
         with self.store.transaction() as db:
             accounts = self.store.read(db, "v2_accounts")
             for account in accounts.values():
+                account["ai_action_enabled"] = False
                 account["position_review_enabled"] = False
                 account["profit_trailing_enabled"] = False
                 account["ai_take_profit_enabled"] = False
@@ -213,6 +220,9 @@ class Workspace:
     def _save_account(self, account):
         account = Account.model_validate(account).model_dump()
         account["id"] = account["id"] or secrets.token_hex(8)
+        prefs = self.store.get("v2_preferences")
+        if account["ai_action_enabled"] and (not prefs["ai_model"] or not ready(prefs, self.vault)):
+            raise ValueError("请先在数据与 AI 中连接 AI 并选择模型，再开启本账户交易前审核")
         for sizing in account["sizing"]:
             if sizing["leverage"] > 1:
                 limits = self.limits(sizing["instrument_id"], account["exchange"], account["id"])
@@ -378,7 +388,9 @@ class Workspace:
 
     def preferences(self, prefs):
         prefs = Preferences.model_validate(prefs).model_dump()
-        if (prefs["ai_enabled"] or prefs["ai_data_enabled"] or prefs["ai_action_enabled"]) and (
+        if prefs["ai_action_enabled"]:
+            raise ValueError("交易前 AI 审核已迁移到账户设置，请按账户启用")
+        if (prefs["ai_enabled"] or prefs["ai_data_enabled"]) and (
             not prefs["ai_model"] or not ready(prefs, self.vault)
         ):
             raise ValueError("请先完成所选 AI 连接并选择模型；官方登录需获准使用 ChatGPT 计划")
@@ -411,7 +423,6 @@ class Workspace:
                     "ai_enabled",
                     "ai_model",
                     "ai_intervene",
-                    "ai_action_enabled",
                     "evaluation_interval",
                     "ai_reaudit_threshold_pct",
                     "min_score",
@@ -519,7 +530,6 @@ class Workspace:
                         "ai_enabled",
                         "ai_model",
                         "ai_intervene",
-                        "ai_action_enabled",
                         "evaluation_interval",
                         "ai_reaudit_threshold_pct",
                         "ai_data_enabled",
@@ -723,8 +733,24 @@ class Workspace:
                             )
                         else:
                             self.errors.pop(aid, None)
+                            entry_report(
+                                self,
+                                aid,
+                                op,
+                                result.get("status", "unknown"),
+                                "请以本账户成交记录及保护单状态为准",
+                                "add" if (adding if account["kind"] == "paper" else bool(held)) else "open",
+                            )
                     except ValueError as exc:
                         self.errors[aid] = str(exc)
+                        entry_report(
+                            self,
+                            aid,
+                            op,
+                            "pending" if str(exc).startswith("等待") else "blocked",
+                            str(exc),
+                            "add" if (adding if account["kind"] == "paper" else bool(held)) else "open",
+                        )
             except Exception:
                 self.errors[aid] = "账户执行暂停，请检查数据与审计记录"
 
@@ -796,7 +822,7 @@ class Workspace:
         return {
             "history_scope": self.logic.history_scope(),
             "position_changes": changes,
-            "version": "0.9.0",
+            "version": "0.10.0",
             "now": now,
             "demo": self.market.demo,
             "watchlist": self.store.get("v2_watchlist"),
