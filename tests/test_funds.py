@@ -387,3 +387,23 @@ def test_binance_authenticates_exact_private_url_not_public_market_socket(worksp
         await asyncio.gather(task, return_exceptions=True)
 
     asyncio.run(scenario())
+
+
+def test_slow_account_write_does_not_block_other_streams(workspace):
+    async def scenario():
+        a = real_account(workspace)
+        f = AccountStreams(workspace, FakeStream)
+
+        def slow_persist(*args):
+            time.sleep(0.3)
+            return False
+
+        f.persist = slow_persist
+        task = asyncio.create_task(f.session(a, f.identity(a)))
+        started = time.monotonic()
+        await asyncio.sleep(0.05)
+        assert time.monotonic() - started < 0.2
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(scenario())

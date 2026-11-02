@@ -294,7 +294,7 @@ class AccountStreams:
             else:
                 raw = None
             result = snapshot(account, balance, positions, raw)
-            if self.persist(account, identity, result):
+            if await asyncio.to_thread(self.persist, account, identity, result):
                 state["base"] = result
                 state["symbols"] = tuple(
                     sorted(
