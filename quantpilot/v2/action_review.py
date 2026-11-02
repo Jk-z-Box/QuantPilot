@@ -178,7 +178,29 @@ class ActionReview:
                         "stage": "account_risk" if action in ("open", "add") else "position_exit",
                         "position": position,
                         "portfolio_positions": book.get("positions", {}),
-                        "opportunity": source_op,
+                        "opportunity": (
+                            {
+                                k: source_op.get(k)
+                                for k in (
+                                    "id",
+                                    "instrument_id",
+                                    "exchange",
+                                    "symbol",
+                                    "direction",
+                                    "score",
+                                    "valid",
+                                    "min_score",
+                                    "expires_at",
+                                    "profile",
+                                    "plan",
+                                    "logic_version",
+                                    "market_review_ticket",
+                                )
+                            }
+                            if action in ("open", "add")
+                            else source_op
+                        ),
+                        "shared_market_review": shared.get("result") if action in ("open", "add") else None,
                         "quote": quote,
                         "account_sizing": next(
                             (s for s in account["sizing"] if s["instrument_id"] == key), None

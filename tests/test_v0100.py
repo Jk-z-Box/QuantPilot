@@ -76,6 +76,8 @@ def test_shared_market_independent_accounts_and_messages(workspace, account, opp
     assert inspect(w, a, opportunity, quote)["state"] == "approved"
     assert inspect(w, b, opportunity, quote)["state"] == "rejected"
     for data in calls[1:]:
+        assert "indicators" not in data["opportunity"] and "evidence" not in data["opportunity"]
+        assert data["shared_market_review"]["decision"] == "approve"
         assert D(data["account_balance"]["equity"]) == 10000
         assert D(data["account_balance"]["available"]) == 10000
         assert data["portfolio_complete"] and data["portfolio_empty"]
