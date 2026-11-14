@@ -29,7 +29,7 @@ function renderParameterFields(schema) {
           .map(([key, label, min, max, type]) =>
             type === "boolean"
               ? `<label class="check"><input name="${key}" type="checkbox">${esc(label)}</label>`
-              : `<div class="parameter-field"><label for="logic_${key}">${esc(label)}</label><input id="logic_${key}" name="${key}" type="number" min="${min}" max="${max}" step="${type === "integer" ? 1 : "any"}" required>${properties[key].optional ? `<label class="override-row"><input type="checkbox" name="override_${key}" aria-label="启用 ${esc(label)}" checked>启用此条件 · 关闭后不参与</label>` : `<small class="fine">所属模块开启时生效</small>`}<button type="button" class="text-button parameter-default" data-default="${key}">恢复默认 ${properties[key].default}</button></div>`,
+              : `<div class="parameter-field"><label for="logic_${key}">${esc(label)}</label><input id="logic_${key}" name="${key}" type="number" min="${min}" max="${max}" step="${type === "integer" ? 1 : "any"}" required>${!["ttl_override", "target_1_ratio"].includes(key) ? `<label class="override-row"><input type="checkbox" name="override_${key}" aria-label="启用 ${esc(label)}" checked>${properties[key].optional ? "启用此条件 · 关闭后不参与" : "使用此参数 · 关闭时停用依赖计算"}</label>` : `<small class="fine">所属模块开启时生效</small>`}<button type="button" class="text-button parameter-default" data-default="${key}">恢复默认 ${properties[key].default}</button></div>`,
           )
           .join("")}</div></details>`,
     )
