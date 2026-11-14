@@ -12,7 +12,7 @@ let parameterFields = [];
 function renderParameterFields(schema) {
   const properties = schema.properties;
   parameterFields = Object.entries(properties)
-    .filter(([k]) => k !== "overrides")
+    .filter(([k]) => !["overrides", "semantics_version"].includes(k))
     .map(([k, v]) => [k, v.title, v.minimum, v.maximum, v.type]);
   const groups = [
     ...new Set(
@@ -29,11 +29,21 @@ function renderParameterFields(schema) {
           .map(([key, label, min, max, type]) =>
             type === "boolean"
               ? `<label class="check"><input name="${key}" type="checkbox">${esc(label)}</label>`
-              : `<div class="parameter-field"><label for="logic_${key}">${esc(label)}</label><input id="logic_${key}" name="${key}" type="number" min="${min}" max="${max}" step="${type === "integer" ? 1 : "any"}" required><label class="override-row"><input type="checkbox" name="override_${key}" aria-label="启用 ${esc(label)} 数值覆盖" checked>使用自定值 · 关闭恢复 ${properties[key].default}</label></div>`,
+              : `<div class="parameter-field"><label for="logic_${key}">${esc(label)}</label><input id="logic_${key}" name="${key}" type="number" min="${min}" max="${max}" step="${type === "integer" ? 1 : "any"}" required>${properties[key].optional ? `<label class="override-row"><input type="checkbox" name="override_${key}" aria-label="启用 ${esc(label)}" checked>启用此条件 · 关闭后不参与</label>` : `<small class="fine">所属模块开启时生效</small>`}<button type="button" class="text-button parameter-default" data-default="${key}">恢复默认 ${properties[key].default}</button></div>`,
           )
           .join("")}</div></details>`,
     )
     .join("");
+  $("logicFields")
+    .querySelectorAll("[data-default]")
+    .forEach(
+      (b) =>
+        (b.onclick = () => {
+          $("logicForm").elements.namedItem(b.dataset.default).value =
+            properties[b.dataset.default].default;
+          logicDirty = true;
+        }),
+    );
 }
 const sources = {
   initial: "初始版本",
@@ -49,7 +59,11 @@ const actions = {
   insufficient: "样本不足",
   cooldown: "冷却中",
   external_active: "交易所持仓保护中",
-  no_safe_proposal: "无可用方案",
+  no_safe_proposal: "未提供可应用修改（旧记录）",
+  no_proposal: "未提出修改",
+  evidence_missing: "交易证据不足",
+  unchanged_proposal: "参数无变化",
+  invalid_proposal: "方案校验未通过",
 };
 function scoreText(v) {
   return v === null || v === undefined ? "待评分" : v + " / 100";
@@ -77,6 +91,7 @@ function reviewValues() {
       [
         "passing_score",
         "interval_hours",
+        "cooldown_hours",
         "minimum_trades",
         "lookback_days",
       ].map((k) => [k, Number(f.elements.namedItem(k).value)]),
@@ -140,6 +155,29 @@ async function loadManagement(force = false) {
         )
         .join("");
       if (!logicDirty) fillForm($("logicForm"), fresh.current.parameters);
+      $("logicEvidence").textContent =
+        `已记录完整交易过程 ${fresh.evidence_summary.recorded_complete_trades} 笔；当前统计中约 ${fresh.evidence_summary.legacy_missing} 笔缺少新格式证据。权益与浮盈浮亏按 5 秒采样，历史缺失不会由 AI 补造。`;
+      $("logicMigration").textContent = fresh.migration_note || "";
+      $("logicMigration").hidden = !fresh.migration_note;
+      const labels = fresh.parameter_schema.properties;
+      $("effectiveLogic").innerHTML =
+        `<p class="fine">这是已保存并实际生效的配置。未保存编辑不影响运行。模块关闭时所属参数仅保留、不执行。</p><div class="effective-rules">${Object.entries(
+          fresh.effective.switches,
+        )
+          .map(
+            ([k, v]) =>
+              `<div><span>${esc(labels[k]?.title || k)}</span><b class="${v ? "positive" : "muted"}">${v ? "启用" : "停用"}</b></div>`,
+          )
+          .join(
+            "",
+          )}</div><details><summary>查看已保存的参数值</summary><div class="effective-rules">${Object.entries(
+          fresh.effective.values,
+        )
+          .map(
+            ([k, v]) =>
+              `<div><span>${esc(labels[k]?.title || k)}</span><b>${v == null ? "停用" : esc(String(v))}</b></div>`,
+          )
+          .join("")}</div></details>`;
       if (!reviewDirty) fillForm($("logicReviewForm"), fresh.settings);
       if (!archiveDirty)
         $("archiveForm").max_backups.value = fresh.settings.max_backups;
@@ -150,7 +188,7 @@ async function loadManagement(force = false) {
             .reverse()
             .map(
               (r) =>
-                `<tr><td>${time(r.at)}<small>${esc(r.version.slice(0, 8))}</small></td><td>${scoreText(r.score)}<small>合格线 ${r.passing_score}</small></td><td><span class="badge">${esc(actions[r.action] || r.action)}</span></td>${metricCells(r.metrics)}<td class="review-summary">${esc(r.summary)}${r.weaknesses?.length ? `<ul>${r.weaknesses.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</td></tr>`,
+                `<tr><td>${time(r.at)}<small>${esc(r.version.slice(0, 8))}</small></td><td>${scoreText(r.score)}<small>合格线 ${r.passing_score}</small></td><td><span class="badge">${esc(actions[r.action] || r.action)}</span></td>${metricCells(r.metrics)}<td class="review-summary">${esc(r.summary)}${r.proposal_reason ? `<p>${esc(r.proposal_reason)}</p>` : ""}${r.validation ? `<p class="fine">${esc(r.validation)}</p>` : ""}${r.comparison ? `<p class="fine">历史入场规则复算 ${r.comparison.samples} 笔，决策变化 ${r.comparison.changed_decisions} 笔；不是收益回测。</p>` : ""}${r.changes ? `<details><summary>查看修改前后 · ${Object.keys(r.changes).length} 项</summary><pre class="logic-diff">${esc(JSON.stringify(r.changes, null, 2))}</pre></details>` : ""}${r.weaknesses?.length ? `<ul>${r.weaknesses.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</td></tr>`,
             )
             .join("")}</tbody></table>`
         : '<div class="management-empty">还没有复盘记录。连接 AI 后可立即复盘，或开启定期复盘。</div>';
@@ -212,6 +250,7 @@ $("logicForm").onsubmit = (e) => {
     parameters.overrides = Object.fromEntries(
       parameterFields
         .filter(([, , , , t]) => t !== "boolean")
+        .filter(([k]) => f.elements.namedItem("override_" + k))
         .map(([k]) => [k, f.elements.namedItem("override_" + k).checked]),
     );
     await api(
@@ -427,3 +466,13 @@ $("applyUpdate").onclick = () => {
     });
   };
 };
+
+$("showLogicEvidence").onclick = () =>
+  action(async () => {
+    const e = await api("/api/v2/logic/evidence");
+    modal(
+      "交易证据与分组统计",
+      `<p class="fine">账户已匿名化。跨版本仓位单独标识，交易所未提供的费用或盈亏显示未知。旧交易只恢复已有记录，不补造当时指标。</p><div class="table-wrap"><table class="management-table"><thead><tr><th>账户 / 品种</th><th>方向 / 版本</th><th>交易数</th><th>净盈亏</th><th>最大盈利占比</th></tr></thead><tbody>${e.groups.map((g) => `<tr><td>${esc(g.account)} · ${esc(g.symbol)}<small>${esc(g.kind)}</small></td><td>${esc(g.side)} · ${esc({ trend_long: "多周期偏多", trend_short: "多周期偏空", mixed_or_flat: "分歧 / 震荡", unknown: "历史状态缺失" }[g.entry_regime] || "未知")}<small>${esc(g.entry_version?.slice(0, 8))} · ${g.attribution === "mixed" ? "跨版本" : "单版本"}</small></td><td>${g.trades}</td><td>${fmt(g.net_pnl)}</td><td>${g.largest_profit_share == null ? "未知" : (g.largest_profit_share * 100).toFixed(1) + "%"}</td></tr>`).join("")}</tbody></table></div><h3>权益采样</h3>${e.equity_curves.map((c) => `<p>${esc(c.account)} · ${c.samples} 个样本 · 观察回撤 ${(c.marked_drawdown_fraction * 100).toFixed(2)}%<br><small>包含入金出金影响；不作为已校正收益率</small></p>`).join("")}<h3>最近完整交易</h3>${e.closed_trade_evidence.map((t) => `<details class="parameter-group"><summary>${esc(t.signal?.symbol || "未知品种")} · ${esc(t.signal?.direction || "未知")} · ${time(t.closed)} · 净盈亏 ${fmt(t.outcome?.trade_net_pnl)}</summary><p>账户 ${esc(t.account)} · 关联版本 ${esc((t.versions || []).map((v) => v?.slice(0, 8)).join(" → "))}</p><p>采样最大浮盈 ${fmt(t.mfe)} / 最大浮亏 ${fmt(t.mae)}</p><p class="fine">缺失：${esc((t.missing || []).join("；") || "已记录入场快照")}</p><details><summary>入场依据与风险快照</summary><pre class="logic-diff">${esc(JSON.stringify({ signal: t.signal, risk: t.risk_and_sizing, account_before: t.account_before, effective_parameters: t.effective_parameters }, null, 2))}</pre></details>${(t.events || []).map((v) => `<details><summary>${time(v.at)} · ${esc({ open: "开仓", add: "加仓", close: "平仓 / 减仓", funding: "资金费", plan_change: "点位调整", strategy_transition: "策略版本变更", native_protection_fill: "交易所保护成交", exchange_fill: "交易所开仓确认" }[v.action] || v.action)}</summary><pre class="logic-diff">${esc(JSON.stringify(v.detail, null, 2))}</pre></details>`).join("")}</details>`).join("") || "<p>暂无完整证据，后续交易将自动记录。</p>"}<h3>最近被拒绝的机会</h3>${e.rejected_opportunities.map((r) => `<p>${time(r.at)} · ${esc(r.detail.signal?.symbol || r.instrument_id)} · ${esc(r.detail.reason)}</p>`).join("") || "<p>暂无记录</p>"}<button type="button" class="secondary" id="closeEvidence">关闭</button>`,
+    );
+    $("closeEvidence").onclick = () => $("dialog").close();
+  });

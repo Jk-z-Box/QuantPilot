@@ -9,6 +9,7 @@ import time
 import ccxt
 
 from ..market import decimal as D
+from . import journal
 from .accounts import ledger, size_order
 from .funds import snapshot
 from .limits import contract_limits
@@ -85,7 +86,7 @@ class ExchangeBroker:
                 "cross_margin",
             )
             ready = (
-                cert["version"] == "0.11.1"
+                cert["version"] == "0.12.0"
                 and cert["exchange"] == account["exchange"]
                 and cert["credential_fingerprint"] == fingerprint
                 and all(cert["checks"].get(k) is True for k in required)
@@ -403,6 +404,11 @@ class ExchangeBroker:
                         else str(base_qty * D(order.get("average") or sizing["price"]))
                     )
                     positions[key] = {
+                        "journal_id": old.get("journal_id", identity) if old else identity,
+                        "opened_at": old.get("opened_at", time.time()) if old else time.time(),
+                        "entry_logic_version": old.get("entry_logic_version", old.get("logic_version"))
+                        if old
+                        else opportunity.get("logic_version"),
                         "parameters": opportunity.get("parameters", {}),
                         "logic_version": old.get("logic_version")
                         if old
@@ -426,6 +432,36 @@ class ExchangeBroker:
                         "symbol": item["symbol"],
                     }
                     self.store.write(db, "v2_managed", managed)
+                    journal.entry(
+                        db,
+                        aid,
+                        key,
+                        positions[key]["journal_id"],
+                        account,
+                        opportunity,
+                        quotes[key],
+                        sizing,
+                        snapshot,
+                        {},
+                        bool(old),
+                        getattr(self, "signal_frames", {}).get(opportunity.get("id")),
+                    )
+                    journal.event(
+                        db,
+                        aid,
+                        key,
+                        "exchange_fill",
+                        {
+                            "order_id": order.get("id"),
+                            "average": order.get("average"),
+                            "filled": filled,
+                            "fee": order.get("fee"),
+                            "fees": order.get("fees"),
+                            "native_position": position,
+                            "status": "protected",
+                        },
+                        positions[key]["journal_id"],
+                    )
                     db.execute(
                         "UPDATE v2_orders SET state='protected',result=? WHERE id=?",
                         (json.dumps(result), identity),
@@ -592,6 +628,22 @@ class ExchangeBroker:
                             "INSERT OR REPLACE INTO notification_fills VALUES (?,?)",
                             (identity, str(quantity)),
                         )
+                        journal.event(
+                            db,
+                            account["id"],
+                            key,
+                            "native_protection_fill",
+                            {
+                                "order_id": oid,
+                                "cumulative_qty": str(quantity * cs),
+                                "delta_qty": str((quantity - previous) * cs),
+                                "average": fill.get("average"),
+                                "fee": fill.get("fee"),
+                                "fees": fill.get("fees"),
+                                "reason": reason,
+                            },
+                            position.get("journal_id"),
+                        )
                         trade_event(
                             self.store,
                             db,
@@ -642,6 +694,18 @@ class ExchangeBroker:
                         continue
                     with self.store.transaction() as db:
                         m = self.store.read(db, "v2_managed")
+                        journal.close(
+                            db,
+                            aid,
+                            key,
+                            p,
+                            {
+                                "reason": "exchange_position_closed",
+                                "trade_net_pnl": None,
+                                "missing": ["complete exchange fill/funding history; PnL not inferred"],
+                            },
+                            True,
+                        )
                         m[aid].pop(key, None)
                         self.store.write(db, "v2_managed", m)
                         db.execute(
@@ -680,11 +744,13 @@ class ExchangeBroker:
                 close = (
                     protection_missing
                     or (
-                        parameters["trend_exit_enabled"]
+                        not op.get("position_reviewed")
+                        and parameters["trend_exit_enabled"]
                         and op.get("direction") not in (p["side"], "wait", "flat")
                     )
                     or (
-                        parameters["event_exit_enabled"]
+                        not op.get("position_reviewed")
+                        and parameters["event_exit_enabled"]
                         and any("事件风险" in b for b in op.get("blockers", []))
                     )
                     or op.get("ai", {}).get("action") == "close"
@@ -693,7 +759,8 @@ class ExchangeBroker:
                 )
                 reduce = (
                     (
-                        parameters["invalid_signal_reduce_enabled"]
+                        not op.get("position_reviewed")
+                        and parameters["invalid_signal_reduce_enabled"]
                         and (not op.get("valid") or op.get("expires_at", 0) <= time.time())
                     )
                     or (
@@ -773,6 +840,21 @@ class ExchangeBroker:
                         )
                         with self.store.transaction() as db:
                             m = self.store.read(db, "v2_managed")
+                            journal.close(
+                                db,
+                                aid,
+                                key,
+                                p,
+                                {
+                                    "reason": "risk_exit" if close else "risk_reduce",
+                                    "filled": confirmed.get("filled"),
+                                    "price": confirmed.get("average"),
+                                    "fee": confirmed.get("fee"),
+                                    "fees": confirmed.get("fees"),
+                                    "trade_net_pnl": None,
+                                },
+                                False,
+                            )
                             m[aid][key]["risk_reduced"] = True
                             self.store.write(db, "v2_managed", m)
                         if protection_missing:

@@ -132,6 +132,7 @@ class Account(Model):
     ai_action_enabled: bool = False
     balance_stream_enabled: bool = True
     position_review_enabled: bool = False
+    strategy_recheck_enabled: bool = False
     position_review_interval: int = Field(default=300, ge=60, le=86400, strict=True)
     profit_trailing_enabled: bool = False
     ai_take_profit_enabled: bool = False
@@ -141,6 +142,7 @@ class Account(Model):
     @model_validator(mode="after")
     def valid_sizing(self):
         if not self.position_review_enabled:
+            self.strategy_recheck_enabled = False
             self.profit_trailing_enabled = False
             self.ai_take_profit_enabled = False
         if self.kind == "paper":

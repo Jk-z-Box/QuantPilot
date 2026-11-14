@@ -326,6 +326,20 @@ def install(app, workspace, session, mutation):
     def ai_data():
         return safe(workspace.research.request_now)
 
+    @app.get("/api/v2/logic/evidence", dependencies=[Depends(session)])
+    def logic_evidence():
+        from .journal import review_evidence
+
+        config = workspace.logic.state()
+        return review_evidence(
+            workspace.store,
+            max(
+                config["history_scope"]["started_at"],
+                time.time() - config["settings"]["lookback_days"] * 86400,
+            ),
+            time.time(),
+        )
+
     @app.get("/api/v2/logic", dependencies=[Depends(session)])
     def logic_state():
         return workspace.logic.state()

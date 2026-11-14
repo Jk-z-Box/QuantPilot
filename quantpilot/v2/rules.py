@@ -4,8 +4,7 @@ from pydantic import Field, create_model, model_validator
 
 from .models import Model
 
-# default, lower, upper, group, label. Disabling a numeric override restores its baseline;
-# indicator/action switches independently remove that rule from evaluation.
+# default, lower, upper, group, label. Disabled parameters never fall back to defaults.
 NUMERIC = {
     "ema_fast": (20, 2, 100, "指标", "EMA 快线周期"),
     "ema_slow": (50, 3, 300, "指标", "EMA 慢线周期"),
@@ -77,7 +76,8 @@ FLAGS = {
     "alignment_4h_1h_enabled": ("权重与周期", "4H 与 1H 必须同向"),
     "conservative_alignment_enabled": ("权重与周期", "保守模式要求全部周期同向"),
     "entry_enabled": ("开仓与退出", "自动策略开仓"),
-    "atr_stop_enabled": ("开仓与退出", "使用 ATR 止损（关闭改用固定比例）"),
+    "atr_stop_enabled": ("开仓与退出", "使用 ATR 止损"),
+    "fixed_stop_enabled": ("开仓与退出", "使用固定比例止损（同时启用时采用较近保护）"),
     "target_1_enabled": ("开仓与退出", "第一档止盈"),
     "target_2_enabled": ("开仓与退出", "第二档止盈"),
     "breakeven_enabled": ("开仓与退出", "首次止盈后移至保本"),
@@ -90,22 +90,82 @@ FLAGS = {
 }
 
 
+# These values define a calculation/action, not an optional independent condition.
+REQUIRED = {
+    "ema_fast",
+    "ema_slow",
+    "rsi_period",
+    "macd_fast",
+    "macd_slow",
+    "macd_signal",
+    "atr_period",
+    "volume_lookback",
+    "volatility_lookback",
+    "atr_stop",
+    "fixed_stop_pct",
+    "target_1",
+    "target_2",
+    "target_1_ratio",
+    "ttl_override",
+    "add_default_ratio",
+    "risk_reduce_ratio",
+}
+DEPENDENCIES = {
+    "ema_enabled": ("ema_fast", "ema_slow"),
+    "rsi_enabled": ("rsi_period",),
+    "macd_enabled": ("macd_fast", "macd_slow", "macd_signal"),
+    "volume_enabled": ("volume_lookback",),
+    "volume_confirm_enabled": ("volume_lookback", "volume_multiplier"),
+    "volatility_enabled": ("volatility_lookback", "atr_period"),
+    "atr_stop_enabled": ("atr_period", "atr_stop"),
+    "fixed_stop_enabled": ("fixed_stop_pct",),
+    "target_1_enabled": ("target_1",),
+    "target_2_enabled": ("target_2",),
+    "price_reduce_enabled": ("reduce_trigger_r", "risk_reduce_ratio"),
+    "invalid_signal_reduce_enabled": ("risk_reduce_ratio",),
+    "funding_enabled": ("funding_limit",),
+}
+
+
+def active(p, key):
+    return p.get("overrides", {}).get(key, True)
+
+
+def resolved(p):
+    p = {**p, "overrides": dict(p.get("overrides", {}))}
+    for flag, keys in DEPENDENCIES.items():
+        p[flag] = p[flag] and all(active(p, k) for k in keys)
+    # The volume master switch also removes its mandatory gate.
+    p["volume_confirm_enabled"] &= p["volume_enabled"]
+    for k in NUMERIC:
+        if (k.startswith("weight_") or k.startswith("frame_")) and not active(p, k):
+            p[k] = 0
+    for f in ("1w", "1d", "4h", "1h"):
+        p["frame_" + f + "_enabled"] &= p["frame_" + f + "_weight"] > 0
+    return p
+
+
 @model_validator(mode="after")
 def ordered(self):
     p = self.model_dump()
-    e = {k: (p[k] if p["overrides"].get(k, True) else v[0]) for k, v in NUMERIC.items()}
-    if e["ema_fast"] >= e["ema_slow"] or e["macd_fast"] >= e["macd_slow"]:
-        raise ValueError("快线周期必须小于慢线")
-    if e["target_2"] <= e["target_1"]:
-        raise ValueError("第二档止盈须高于第一档")
-    if (
-        e["rsi_long_min"] > e["rsi_long_max"]
-        or e["rsi_short_min"] > e["rsi_short_max"]
-        or e["atr_score_min"] > e["atr_score_max"]
+    e = resolved(p)
+    if (e["ema_enabled"] and e["ema_fast"] >= e["ema_slow"]) or (
+        e["macd_enabled"] and e["macd_fast"] >= e["macd_slow"]
     ):
-        raise ValueError("指标上下限顺序错误")
-    if not any(p["frame_" + f + "_enabled"] for f in ("1w", "1d", "4h", "1h")):
-        raise ValueError("至少开启一个趋势周期")
+        raise ValueError("快线周期必须小于慢线")
+    if e["target_1_enabled"] and e["target_2_enabled"] and e["target_2"] <= e["target_1"]:
+        raise ValueError("第二档止盈须高于第一档")
+    for lo, hi in (
+        ("rsi_long_min", "rsi_long_max"),
+        ("rsi_short_min", "rsi_short_max"),
+        ("atr_score_min", "atr_score_max"),
+    ):
+        if active(e, lo) and active(e, hi) and e[lo] > e[hi]:
+            raise ValueError("指标上下限顺序错误")
+    if not any(e["frame_" + f + "_enabled"] for f in ("1w", "1d", "4h", "1h")):
+        raise ValueError("至少开启一个有正权重的趋势周期")
+    if any(not active(p, k) for k in ("ttl_override", "target_1_ratio")):
+        raise ValueError("信号有效期和分批比例是必要配置；请使用周期或止盈模块开关")
     if set(p["overrides"]) - set(NUMERIC):
         raise ValueError("未知参数开关")
     return self
@@ -123,26 +183,58 @@ Parameters = create_model(
                 ge=v[1],
                 le=v[2],
                 title=v[4],
-                json_schema_extra={"group": v[3]},
+                json_schema_extra={"group": v[3], "optional": k not in REQUIRED},
                 strict=isinstance(v[0], int),
             ),
         )
         for k, v in NUMERIC.items()
     },
     **{
-        k: (bool, Field(default=k != "price_reduce_enabled", title=v[1], json_schema_extra={"group": v[0]}))
+        k: (
+            bool,
+            Field(
+                default=k not in ("price_reduce_enabled", "fixed_stop_enabled"),
+                title=v[1],
+                json_schema_extra={"group": v[0]},
+            ),
+        )
         for k, v in FLAGS.items()
     },
+    semantics_version=(int, Field(default=2, ge=2, le=2)),
     overrides=(
         dict[str, bool],
-        Field(default_factory=dict, description="关闭数值覆盖时恢复基准值；指标和动作开关独立控制是否参与。"),
+        Field(
+            default_factory=dict,
+            description="false 表示不参与评估或执行；必需计算参数关闭时停用所属模块，不使用默认值。",
+        ),
     ),
 )
 
 
 def effective(parameters=None):
-    p = Parameters.model_validate(parameters or {}).model_dump()
+    return resolved(Parameters.model_validate(parameters or {}).model_dump())
+
+
+def migrate_legacy(parameters):
+    """Freeze old effective behavior once; all subsequent switches use v2 semantics."""
+    if parameters.get("semantics_version") == 2:
+        return parameters
+    p = dict(parameters)
     for k, v in NUMERIC.items():
-        if not p["overrides"].get(k, True):
+        if not p.get("overrides", {}).get(k, True):
             p[k] = v[0]
-    return p
+    p["overrides"] = {}
+    p["fixed_stop_enabled"] = not p.get("atr_stop_enabled", True)
+    return Parameters.model_validate(p).model_dump()
+
+
+def effective_view(parameters):
+    p = effective(parameters)
+    return {
+        "switches": {k: p[k] for k in FLAGS},
+        "values": {k: p[k] if active(p, k) else None for k in NUMERIC},
+        "notes": [
+            "关闭项不参与；依赖模块关闭时，其数值仅保存、不执行。",
+            "单档止盈平仓 100%；双档按填写比例；全部关闭时不生成止盈动作。",
+        ],
+    }

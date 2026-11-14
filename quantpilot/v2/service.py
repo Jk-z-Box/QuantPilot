@@ -7,6 +7,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+from . import journal
 from .accounts import PaperBroker, ledger, valuation
 from .action_review import ActionReview
 from .ai import apply_revision, review
@@ -37,6 +38,9 @@ class Workspace:
         self.feeds = feeds or Feeds(vault, store)
         self.paper, self.exchange = PaperBroker(store), ExchangeBroker(store, vault)
         self.quotes, self.opportunities, self.frames, self.errors = {}, {}, {}, {}
+        self.signal_frames = {}
+        self.paper.signal_frames = self.signal_frames
+        self.exchange.signal_frames = self.signal_frames
         self.lock, self.stop_event = threading.RLock(), threading.Event()
         self.thread = None
         self.quote_thread = None
@@ -92,6 +96,8 @@ class Workspace:
         self.codex = CodexConnection()
         self.research = ResearchEngine(self)
         self.logic = LogicEngine(self)
+        journal.initialize(self.store)
+        journal.backfill_legacy(self.store)
         self.notifications = Notifications(self)
         self.history = History(self)
         self.position_reviews = PositionReviews(self)
@@ -136,6 +142,7 @@ class Workspace:
             for account in accounts.values():
                 account["ai_action_enabled"] = False
                 account["position_review_enabled"] = False
+                account["strategy_recheck_enabled"] = False
                 account["profit_trailing_enabled"] = False
                 account["ai_take_profit_enabled"] = False
             self.store.write(db, "v2_accounts", accounts)
@@ -509,6 +516,11 @@ class Workspace:
             if op.get("id"):
                 op["id"] += ":" + logic["id"]
             op["policy"] = signal_policy(prefs)
+            if op.get("id"):
+                with self.lock:
+                    self.signal_frames[op["id"]] = {f: rows[-360:] for f, rows in frames.items()}
+                    for expired in list(self.signal_frames)[:-100]:
+                        self.signal_frames.pop(expired, None)
         with self.lock:
             current_item = next((i for i in self.store.get("v2_watchlist") if i["id"] == key), None)
             if not current_item or (item["symbol"], item["exchange"]) != (
@@ -590,6 +602,7 @@ class Workspace:
             ]
             for future in futures:
                 future.result()
+        journal.sample(self)
         self.execute()
         self.funds.publish()
         self.position_reviews.scheduled()
@@ -745,6 +758,29 @@ class Workspace:
                                 "add" if (adding if account["kind"] == "paper" else bool(held)) else "open",
                             )
                     except ValueError as exc:
+                        rejection = {
+                            "reason": str(exc),
+                            "signal": {
+                                k: op.get(k)
+                                for k in (
+                                    "id",
+                                    "symbol",
+                                    "direction",
+                                    "score",
+                                    "logic_version",
+                                    "evaluated_at",
+                                    "plan",
+                                    "blockers",
+                                )
+                            },
+                        }
+                        with self.store.transaction() as db:
+                            last = db.execute(
+                                "SELECT detail FROM v2_trade_events WHERE account_id=? AND instrument_id=? AND action='rejected' ORDER BY id DESC LIMIT 1",
+                                (aid, key),
+                            ).fetchone()
+                            if not last or json.loads(last[0]) != rejection:
+                                journal.event(db, aid, key, "rejected", rejection)
                         self.errors[aid] = str(exc)
                         entry_report(
                             self,
@@ -827,7 +863,7 @@ class Workspace:
         return {
             "history_scope": self.logic.history_scope(),
             "position_changes": changes,
-            "version": "0.11.1",
+            "version": "0.12.0",
             "now": now,
             "demo": self.market.demo,
             "watchlist": self.store.get("v2_watchlist"),

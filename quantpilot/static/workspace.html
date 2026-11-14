@@ -77,7 +77,7 @@
           </div>
           <a href="/legacy" class="legacy">旧版模拟账本 ↗</a
           ><button id="logout" class="text-button">退出登录</button
-          ><small>QUANTPILOT 0.11</small>
+          ><small>QUANTPILOT 0.12</small>
         </div>
       </aside>
       <div class="main">
@@ -848,7 +848,16 @@
             <div id="logicStatus" class="notice-box" role="status">
               正在读取策略状态…
             </div>
+            <div id="logicMigration" class="notice-box" hidden></div>
             <div class="logic-metrics" id="logicMetrics"></div>
+            <p id="logicEvidence" class="fine"></p>
+            <button type="button" class="secondary" id="showLogicEvidence">
+              查看交易证据与分组统计
+            </button>
+            <details class="card effective-card">
+              <summary>当前实际生效逻辑</summary>
+              <div id="effectiveLogic"></div>
+            </details>
             <div class="management-grid">
               <article class="card management-card">
                 <div class="card-heading">
@@ -864,26 +873,24 @@
                     <li>
                       <b>确认趋势</b>
                       <p>
-                        只使用已收盘的周线、日线、4H、1H K 线，EMA 确定方向；4H
-                        与 1H 必须一致，保守模式要求四周期一致。
+                        只使用已启用周期的已收盘 K 线。方向由启用的 EMA、MACD 或
+                        RSI 判断；周期一致性要求仅在对应开关开启时执行。
                       </p>
                     </li>
                     <li>
                       <b>逐项评分</b>
                       <p>
-                        趋势 24、EMA/RSI/MACD 动量 18、成交量 12、波动率
-                        6、资金费率 6、合约 OI 4、期权 8、ETF 6、清算
-                        8、宏观新闻 8，总分 100。启用项的权重归一化至
-                        100；缺失数据不重新分配分数。
+                        仅计算已启用指标和条件，按其实际权重归一化至 100
+                        分。关闭项不参与，缺失数据不算通过；具体参数见“当前实际生效逻辑”。
                       </p>
                     </li>
                     <li>
                       <b>生成交易计划</b>
                       <p>
-                        止损距离 = ATR × 止损倍数，至少为价格的
-                        0.3%；两档止盈按风险距离计算。预估手续费与滑点计入收益风险比。MACD
-                        默认 12/26/9，ATR 默认
-                        14；各周期、权重、指标和动作均可在下方调整。
+                        按启用的 ATR
+                        或固定比例规则生成止损，两者都启用时取较近保护。
+                        最小止损距离和收益风险比条件分别受开关控制。
+                        仅执行已启用的止盈、加仓和减仓动作；没有有效保护止损时禁止新增风险。
                       </p>
                     </li>
                     <li>
@@ -904,7 +911,7 @@
                       placeholder="例如：提高成交量确认要求"
                   /></label>
                   <p class="fine">
-                    保存后重新评估信号；已有仓位保留保护，不使用新版本继续加仓。存档保留旧版本评分及截至修改时的已实现净盈亏。
+                    保存后立即重算信号。账户开启“策略更新后立即重评现有仓位”时，立即评估持仓调整；否则保留原策略保护。新版本加仓须先完成持仓重评。存档保留旧版本评分与当时盈亏。
                   </p>
                   <div class="form-actions">
                     <button class="primary">保存并建立新版本</button
@@ -927,6 +934,18 @@
                   AI”中保存的连接和模型。合格时保留逻辑并继续复盘；后续低于合格线时，恢复评估自动优化方案。
                 </p>
                 <form id="logicReviewForm" class="management-form">
+                  <label
+                    >优化最短间隔 / 小时<input
+                      type="number"
+                      name="cooldown_hours"
+                      min="0"
+                      max="168"
+                      step="1"
+                      required
+                    /><small
+                      >0：不额外等待，合法方案立即生效；定期复盘仍按下方间隔执行。</small
+                    ></label
+                  >
                   <label class="check-line"
                     ><input type="checkbox" name="enabled" />启用定期复盘</label
                   >
@@ -981,8 +1000,8 @@
                     /></label>
                   </div>
                   <p class="fine">
-                    AI 可调整所有策略参数及开关，两次自动优化至少间隔 24
-                    小时。交易所账户正在自动交易或有受管仓位时不自动改策略。复盘发送参数、匿名交易结果、汇总及市场背景，不发送密钥。
+                    AI
+                    可调整所有策略参数及开关。通过参数检查后立即备份并生效；账户可开启“策略更新后立即重评持仓”。复盘使用匿名交易全过程、资金风险和当时市场依据；数据缺失明确标注，收益回测不会被伪造。
                   </p>
                   <button class="primary">保存复盘设置</button>
                 </form>

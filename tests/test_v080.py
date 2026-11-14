@@ -164,6 +164,7 @@ def test_telegram_opportunity_has_actual_levels(opportunity):
 
 
 def prepare_position(workspace, account, opportunity, quote, monkeypatch):
+    opportunity = {**opportunity, "parameters": {"price_reduce_enabled": True}}
     enter(workspace, account, opportunity, quote)
     account = workspace.save_account(
         {**account, "position_review_enabled": True, "position_review_interval": 60}

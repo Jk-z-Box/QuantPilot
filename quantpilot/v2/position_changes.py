@@ -3,6 +3,7 @@
 import json
 import time
 
+from . import journal
 from .notifications import emit
 
 
@@ -35,6 +36,17 @@ def record_changes(store, db, aid, key, before, after, reason, reviewed_at, stag
     if not changes:
         return
     now = time.time()
+    paper = store.read(db, "v2_ledgers").get(aid, {}).get("positions", {}).get(key, {})
+    managed = store.read(db, "v2_managed").get(aid, {}).get(key, {})
+    p = paper or managed
+    journal.event(
+        db,
+        aid,
+        key,
+        "plan_change",
+        {"changes": changes, "reason": reason, "stage": stage, "version": p.get("logic_version")},
+        p.get("logic_trade_id") or p.get("journal_id"),
+    )
     row = db.execute(
         "INSERT INTO v2_position_changes(account_id,instrument_id,created,reviewed_at,reason,stage,changes) VALUES (?,?,?,?,?,?,?)",
         (aid, key, now, reviewed_at, reason[:1000], stage, json.dumps(changes)),

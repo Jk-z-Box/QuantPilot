@@ -6,7 +6,7 @@ import statistics
 
 from ..strategy import ema, rsi
 from .models import PROFILES
-from .rules import effective
+from .rules import active, effective
 
 
 def required_bars(parameters=None):
@@ -16,7 +16,7 @@ def required_bars(parameters=None):
         p["ema_slow"] + 1 if p["ema_enabled"] else 0,
         p["macd_slow"] + p["macd_signal"] + 1 if p["macd_enabled"] else 0,
         p["rsi_period"] + 1 if p["rsi_enabled"] else 0,
-        p["atr_period"] + 1,
+        p["atr_period"] + 1 if p["atr_stop_enabled"] or p["volatility_enabled"] else 0,
         p["volume_lookback"] + 1 if p["volume_enabled"] or p["volume_confirm_enabled"] else 0,
         p["volatility_lookback"] + 1 if p["volatility_enabled"] else 0,
     )
@@ -31,7 +31,7 @@ def indicators(rows, parameters=None):
     fast, slow = (
         (ema(close, parameters["ema_fast"]), ema(close, parameters["ema_slow"]))
         if parameters["ema_enabled"]
-        else (close[-1], close[-2])
+        else (None, None)
     )
     series = (
         [
@@ -42,13 +42,19 @@ def indicators(rows, parameters=None):
         else [0.0]
     )
     macd = series[-1]
-    signal = ema(series, parameters["macd_signal"])
+    signal = ema(series, parameters["macd_signal"]) if parameters["macd_enabled"] else 0.0
     tr = [max(r[2] - r[3], abs(r[2] - p[4]), abs(r[3] - p[4])) for p, r in zip(rows, rows[1:], strict=False)]
-    n = parameters["atr_period"]
-    atr = sum(tr[:n]) / n
-    for value in tr[n:]:
-        atr = ((n - 1) * atr + value) / n
-    vol = statistics.mean(r[5] for r in rows[-parameters["volume_lookback"] - 1 : -1])
+    atr = 0.0
+    if parameters["atr_stop_enabled"] or parameters["volatility_enabled"]:
+        n = parameters["atr_period"]
+        atr = sum(tr[:n]) / n
+        for value in tr[n:]:
+            atr = ((n - 1) * atr + value) / n
+    vol = (
+        statistics.mean(r[5] for r in rows[-parameters["volume_lookback"] - 1 : -1])
+        if parameters["volume_enabled"]
+        else 0
+    )
     returns = (
         [
             math.log(b / a)
@@ -61,20 +67,29 @@ def indicators(rows, parameters=None):
         if parameters["volatility_enabled"]
         else [0.0]
     )
-    trend_fast, trend_slow = (fast, slow) if parameters["ema_enabled"] else (close[-1], close[-2])
+    momentum_rsi = rsi(close, parameters["rsi_period"]) if parameters["rsi_enabled"] else None
+    trend = (
+        (fast - slow)
+        if parameters["ema_enabled"]
+        else (macd - signal)
+        if parameters["macd_enabled"]
+        else (momentum_rsi - 50)
+        if momentum_rsi is not None
+        else 0
+    )
     return {
         "ema20": fast,
         "ema50": slow,
-        "rsi": rsi(close, parameters["rsi_period"]) if parameters["rsi_enabled"] else 50.0,
+        "rsi": momentum_rsi,
         "ema_fast_period": parameters["ema_fast"],
         "ema_slow_period": parameters["ema_slow"],
-        "macd": macd,
+        "macd": macd if parameters["macd_enabled"] else None,
         "macd_signal": signal,
-        "macd_hist": macd - signal,
+        "macd_hist": macd - signal if parameters["macd_enabled"] else None,
         "atr": atr,
         "volatility": statistics.pstdev(returns) * 100,
         "volume_ratio": rows[-1][5] / vol if vol else 0,
-        "trend": "long" if trend_fast > trend_slow else "short" if trend_fast < trend_slow else "flat",
+        "trend": "long" if trend > 0 else "short" if trend < 0 else "flat",
         "close": close[-1],
         "timestamp": rows[-1][0] / 1000,
     }
@@ -85,7 +100,7 @@ def evaluate(item, frames, quote, evidence, profile, now, min_score=80, paramete
     rule = PROFILES[profile]
     stats, blockers, reasons = {}, [], []
     active_frames = [f for f in ("1w", "1d", "4h", "1h") if parameters["frame_" + f + "_enabled"]]
-    for frame in dict.fromkeys(active_frames + ["1h"]):
+    for frame in active_frames:
         try:
             stats[frame] = indicators(frames[frame], parameters)
         except (KeyError, ValueError, TypeError):
@@ -105,7 +120,7 @@ def evaluate(item, frames, quote, evidence, profile, now, min_score=80, paramete
         "reasons": reasons,
     }
     base_frame = active_frames[-1]
-    if not stats.get("1h") or not stats.get(base_frame) or not quote or quote.get("error"):
+    if not stats.get(base_frame) or not quote or quote.get("error"):
         return {
             **base,
             "score": 0,
@@ -115,7 +130,7 @@ def evaluate(item, frames, quote, evidence, profile, now, min_score=80, paramete
             "breakdown": [],
             "plan": None,
         }
-    hour = stats["1h"]
+    hour = stats[base_frame]
     direction = stats[base_frame]["trend"]
     sign = 1 if direction == "long" else -1
     if direction == "flat":
@@ -158,31 +173,46 @@ def evaluate(item, frames, quote, evidence, profile, now, min_score=80, paramete
         and aligned < len(active_frames)
     ):
         blockers.append("保守模式要求所有启用周期方向一致")
-    momentum = (
-        parameters["rsi_long_min"] <= hour["rsi"] <= parameters["rsi_long_max"]
-        if sign == 1
-        else parameters["rsi_short_min"] <= hour["rsi"] <= parameters["rsi_short_max"]
+    prefix = "rsi_long" if sign == 1 else "rsi_short"
+    momentum = parameters["rsi_enabled"] and (
+        (not active(parameters, prefix + "_min") or hour["rsi"] >= parameters[prefix + "_min"])
+        and (not active(parameters, prefix + "_max") or hour["rsi"] <= parameters[prefix + "_max"])
     )
-    for key, name, ok in [("rsi", "RSI 动量", momentum), ("macd", "MACD 动量", hour["macd_hist"] * sign > 0)]:
-        if parameters[key + "_enabled"]:
+    for key, name, ok in [
+        ("rsi", "RSI 动量", momentum),
+        ("macd", "MACD 动量", (hour["macd_hist"] or 0) * sign > 0),
+    ]:
+        if parameters[key + "_enabled"] and (
+            key != "rsi" or active(parameters, prefix + "_min") or active(parameters, prefix + "_max")
+        ):
             points(name, parameters["weight_" + key] if ok else 0, parameters["weight_" + key])
-    volume_ok = hour["volume_ratio"] >= rule["volume"] * parameters["volume_multiplier"]
-    if parameters["volume_enabled"]:
+    volume_ok = (
+        active(parameters, "volume_multiplier")
+        and hour["volume_ratio"] >= rule["volume"] * parameters["volume_multiplier"]
+    )
+    if parameters["volume_enabled"] and active(parameters, "volume_multiplier"):
         points("成交量确认", parameters["weight_volume"] if volume_ok else 0, parameters["weight_volume"])
     if parameters["volume_confirm_enabled"] and not volume_ok:
         blockers.append("成交量不支持当前方向")
     atr_fraction = hour["atr"] / hour["close"]
-    if parameters["volatility_enabled"]:
+    if parameters["volatility_enabled"] and (
+        active(parameters, "atr_score_min") or active(parameters, "atr_score_max")
+    ):
         points(
             "波动率与入场位置",
             parameters["weight_volatility"]
-            if parameters["atr_score_min"] <= atr_fraction <= parameters["atr_score_max"]
+            if (not active(parameters, "atr_score_min") or parameters["atr_score_min"] <= atr_fraction)
+            and (not active(parameters, "atr_score_max") or atr_fraction <= parameters["atr_score_max"])
             else 0,
             parameters["weight_volatility"],
         )
-        if atr_fraction > parameters["max_atr_pct"]:
-            blockers.append("波动风险超过设定上限")
-    if hour["atr"] <= 0:
+    if (
+        parameters["volatility_enabled"]
+        and active(parameters, "max_atr_pct")
+        and atr_fraction > parameters["max_atr_pct"]
+    ):
+        blockers.append("波动风险超过设定上限")
+    if parameters["atr_stop_enabled"] and hour["atr"] <= 0:
         blockers.append("ATR 无效")
     funding, oi = quote.get("funding_rate"), quote.get("open_interest")
     if parameters["funding_enabled"]:
@@ -239,12 +269,27 @@ def evaluate(item, frames, quote, evidence, profile, now, min_score=80, paramete
     if not parameters["entry_enabled"]:
         blockers.append("量化逻辑已关闭策略开仓")
     entry = float(quote["ask"] if sign == 1 else quote["bid"])
-    distance = max(
-        hour["atr"] * parameters["atr_stop"]
-        if parameters["atr_stop_enabled"]
-        else entry * parameters["fixed_stop_pct"],
-        entry * parameters["stop_floor_pct"],
-    )
+    distances = []
+    if parameters["atr_stop_enabled"]:
+        distances.append(hour["atr"] * parameters["atr_stop"])
+    if parameters["fixed_stop_enabled"]:
+        distances.append(entry * parameters["fixed_stop_pct"])
+    if not distances or min(distances) <= 0:
+        blockers.append("未配置有效保护止损，不允许新增风险")
+        return {
+            **base,
+            "score": score,
+            "direction": direction,
+            "valid": False,
+            "coverage": round(100 * sum(b["max"] for b in breakdown if b["available"]) / total)
+            if total
+            else 0,
+            "breakdown": breakdown,
+            "plan": None,
+        }
+    distance = min(distances)
+    if active(parameters, "stop_floor_pct"):
+        distance = max(distance, entry * parameters["stop_floor_pct"])
     stop = entry - sign * distance
     if stop <= 0:
         blockers.append("止损价格无效")
@@ -266,19 +311,27 @@ def evaluate(item, frames, quote, evidence, profile, now, min_score=80, paramete
         parameters[f"target_{i + 1}"] * t["ratio"] for i, t in enumerate(targets) if t["enabled"]
     )
     rr = (distance * reward_multiple - costs) / (distance + costs)
-    if rr < (parameters["min_rr_override"] or rule["min_rr"]):
+    if active(parameters, "min_rr_override") and rr < (parameters["min_rr_override"] or rule["min_rr"]):
         blockers.append("扣除预估费用后的收益风险比不足")
     if score < min_score:
         reasons.append(f"尚未达到 {min_score} 分有效阈值")
     plan = {
         "entry": entry,
-        "entry_low": entry - distance * parameters["entry_band_r"],
-        "entry_high": entry + distance * parameters["entry_band_r"],
+        "entry_low": entry - distance * parameters["entry_band_r"]
+        if active(parameters, "entry_band_r")
+        else entry,
+        "entry_high": entry + distance * parameters["entry_band_r"]
+        if active(parameters, "entry_band_r")
+        else entry,
         "stop": stop,
         "targets": targets,
         "rr": round(rr, 2),
-        "add_at": entry + sign * distance * parameters["add_trigger_r"],
-        "reduce_at": entry - sign * distance * parameters["reduce_trigger_r"],
+        "add_at": entry + sign * distance * parameters["add_trigger_r"]
+        if parameters["add_enabled"] and active(parameters, "add_trigger_r")
+        else None,
+        "reduce_at": entry - sign * distance * parameters["reduce_trigger_r"]
+        if parameters["price_reduce_enabled"]
+        else None,
         "risk_per_unit": distance,
         "fee_assumption": 0.001,
         "slippage_assumption": 0.0004,

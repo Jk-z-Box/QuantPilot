@@ -7,12 +7,13 @@ import json
 import time
 
 from ..market import decimal as D
+from . import journal
 from .logic import check_version
 from .margin import CLOSE_FEE_RATE, MAINTENANCE_RATE, estimates, mode
 from .models import PROFILES, pair_enabled, policy_matches
 from .notifications import trade_event
 from .position_changes import levels, position_guard, record_changes
-from .rules import effective
+from .rules import active, effective
 
 FEE = D(".0005")
 SLIP = D(".0002")
@@ -138,7 +139,11 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
         raise ValueError("达到每日亏损上限")
     plan, side = opportunity["plan"], opportunity["direction"]
     price = D(q["ask"] if side == "long" else q["bid"]) * (1 + SLIP if side == "long" else 1 - SLIP)
-    if not adding and not D(plan["entry_low"]) * D(".999") <= price <= D(plan["entry_high"]) * D("1.001"):
+    if (
+        not adding
+        and active(parameters, "entry_band_r")
+        and not D(plan["entry_low"]) * D(".999") <= price <= D(plan["entry_high"]) * D("1.001")
+    ):
         raise ValueError("价格已离开入场区间")
     sizing = next((s for s in account["sizing"] if s["instrument_id"] == key), None)
     if not sizing or (sizing.get("mode") != "system" and not sizing.get("quantity")):
@@ -163,7 +168,13 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
     if distance <= 0:
         raise ValueError("止损方向无效")
     add_count = sizing["add_count"] if sizing["add_count"] is not None else rule["adds"]
-    ratios = sizing["add_ratios"] or [parameters["add_default_ratio"]] * add_count
+    ratios = sizing["add_ratios"] or (
+        [parameters["add_default_ratio"]] * add_count
+        if active(parameters, "add_default_ratio") and parameters["add_enabled"]
+        else []
+    )
+    if adding and not ratios:
+        raise ValueError("未启用加仓比例规则")
     cap = (
         None
         if system
@@ -176,7 +187,13 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
         max(D(0), (D(p["entry"]) - D(p["stop"])) * (1 if p["side"] == "long" else -1)) * D(p["qty"])
         for p in book["positions"].values()
     )
-    risk_budget = max(D(0), equity * D(rule["risk"]) * D(parameters["portfolio_risk_multiple"]) - risk_used)
+    risk_budget = max(
+        D(0),
+        equity
+        * D(rule["risk"])
+        * D(parameters["portfolio_risk_multiple"] if active(parameters, "portfolio_risk_multiple") else 3)
+        - risk_used,
+    )
     risk_amount = min(equity * D(rule["risk"]) * tier["risk_factor"], risk_budget) / (
         distance / price + 2 * FEE + 2 * SLIP
     )
@@ -188,8 +205,12 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
     headroom = min(
         (cap - existing) * price if cap is not None else equity * D(rule["exposure"]),
         equity * D(rule["exposure"]) * tier["risk_factor"] - D(snap["exposure"]),
-        equity * D(rule["exposure"]) * tier["risk_factor"] * D(parameters["group_exposure_fraction"])
-        - correlated,
+        (
+            equity * D(rule["exposure"]) * tier["risk_factor"] * D(parameters["group_exposure_fraction"])
+            - correlated
+        )
+        if active(parameters, "group_exposure_fraction")
+        else equity * D(rule["exposure"]),
         free * tier["margin_fraction"] / (1 / D(leverage) + FEE),
         risk_amount,
     )
@@ -202,7 +223,11 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
             not old
             or old["adds"] >= add_count
             or old["tp_done"]
-            or opportunity["score"] < min(100, min_score + parameters["add_score_bonus"])
+            or opportunity["score"]
+            < min(
+                100,
+                min_score + (parameters["add_score_bonus"] if active(parameters, "add_score_bonus") else 0),
+            )
         ):
             raise ValueError("未满足加仓条件")
         if not old.get("initial_qty"):
@@ -366,6 +391,7 @@ class PaperBroker:
             )
             if self.action_review:
                 self.action_review.check_size(opportunity, sizing)
+            before_snapshot = valuation(book, quotes, now)
             qty, price = sizing["qty"], sizing["price"]
             fee = qty * price * FEE
             book["cash"] = str(D(book["cash"]) - fee)
@@ -412,6 +438,21 @@ class PaperBroker:
                     "funding_at": int(now // 28800) * 28800,
                 }
             self.store.write(db, "v2_ledgers", books)
+            trade_id = old.get("logic_trade_id", identity) if old else identity
+            journal.entry(
+                db,
+                aid,
+                key,
+                trade_id,
+                account,
+                opportunity,
+                quotes[key],
+                sizing,
+                before_snapshot,
+                valuation(book, quotes, now),
+                adding,
+                getattr(self, "signal_frames", {}).get(opportunity.get("id")),
+            )
             detail = {
                 "logic_version": opportunity.get("logic_version"),
                 "instrument_id": key,
@@ -474,7 +515,7 @@ class PaperBroker:
                         "INSERT OR IGNORE INTO logic_trades VALUES (?,?,?,?,?,?)",
                         (
                             p["logic_trade_id"],
-                            p["logic_version"],
+                            p.get("entry_logic_version", p["logic_version"]),
                             time.time(),
                             float(p["logic_net"]),
                             int(p.get("logic_demo", True)),
@@ -494,6 +535,11 @@ class PaperBroker:
                         "exit_reason": reason,
                         "net_pnl": float(p["logic_net"]),
                         "partial_targets": len(p["tp_done"]),
+                        "entry_logic_version": p.get("entry_logic_version", p["logic_version"]),
+                        "final_logic_version": p["logic_version"],
+                        "mixed_versions": p.get("entry_logic_version", p["logic_version"])
+                        != p["logic_version"],
+                        "evidence_id": p["logic_trade_id"],
                     }
                     db.execute(
                         "INSERT OR IGNORE INTO logic_trade_details VALUES (?,?)",
@@ -511,7 +557,13 @@ class PaperBroker:
                 "reason": reason,
                 "margin_mode": mode(p),
                 "isolated_loss_cap_adjustment": str(adjustment),
+                "fee": str(fee),
+                "quote": quote,
+                "planned_stop": p["stop"],
+                "trade_net_pnl": p.get("logic_net"),
+                "entry_logic_version": p.get("entry_logic_version", p.get("logic_version")),
             }
+            journal.close(db, aid, key, p, detail, D(p["qty"]) <= D(".000000001"))
             self.record(db, identity, aid, "close", detail)
             return {"status": "filled", **detail}
 
@@ -551,20 +603,27 @@ class PaperBroker:
             opportunity = opportunities.get(key)
             if not opportunity:
                 continue
-            if parameters["trend_exit_enabled"] and opportunity.get("direction") not in (
-                p["side"],
-                "wait",
-                "flat",
+            if (
+                not opportunity.get("position_reviewed")
+                and parameters["trend_exit_enabled"]
+                and opportunity.get("direction")
+                not in (
+                    p["side"],
+                    "wait",
+                    "flat",
+                )
             ):
                 self.close(aid, key, q, reason="trend_reversal")
             elif (
-                parameters["event_exit_enabled"]
+                not opportunity.get("position_reviewed")
+                and parameters["event_exit_enabled"]
                 and any("事件风险" in b for b in opportunity.get("blockers", []))
             ) or opportunity.get("ai", {}).get("action") == "close":
                 self.close(aid, key, q, reason="event_risk")
             elif (
                 (
-                    parameters["invalid_signal_reduce_enabled"]
+                    not opportunity.get("position_reviewed")
+                    and parameters["invalid_signal_reduce_enabled"]
                     and (not opportunity.get("valid") or opportunity.get("expires_at", 0) <= time.time())
                 )
                 or (
@@ -655,6 +714,14 @@ class PaperBroker:
                         books[aid]["cash"] = str(D(books[aid]["cash"]) - fee)
                         current["funding_at"] = boundary
                         current["logic_net"] = str(D(current.get("logic_net", 0)) - fee)
+                        journal.event(
+                            db,
+                            aid,
+                            key,
+                            "funding",
+                            {"fee": str(fee), "quote": q},
+                            current.get("logic_trade_id"),
+                        )
                         self.store.write(db, "v2_ledgers", books)
                         self.store.audit(
                             db,

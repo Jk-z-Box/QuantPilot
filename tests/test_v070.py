@@ -333,7 +333,7 @@ def test_equity_adapter_verifies_symbol_and_preserves_source():
         equity_history("AVGO", "1d", httpx.MockTransport(lambda r: httpx.Response(200, json=body)))
 
 
-def test_parameter_switches_change_behavior_and_disabled_override_restores_default(quote):
+def test_parameter_switches_change_behavior_and_disabled_parameter_stops_module(quote):
     item = Instrument(id="btc", label="BTC", symbol="BTC/USDT:USDT").model_dump()
     frames = {f: bars(f) for f in ("1w", "1d", "4h", "1h")}
     now = time.time()
@@ -353,7 +353,8 @@ def test_parameter_switches_change_behavior_and_disabled_override_restores_defau
     assert not any("RSI" in b["name"] for b in disabled["breakdown"])
     assert "1w" not in disabled["indicators"]
     assert sum(b["max"] for b in disabled["breakdown"]) < sum(b["max"] for b in baseline["breakdown"])
-    assert effective({"atr_stop": 4, "overrides": {"atr_stop": False}})["atr_stop"] == 2
+    assert effective({"atr_stop": 4, "overrides": {"atr_stop": False}})["atr_stop"] == 4
+    assert not effective({"atr_stop": 4, "overrides": {"atr_stop": False}})["atr_stop_enabled"]
 
 
 @pytest.mark.parametrize(

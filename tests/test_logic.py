@@ -267,15 +267,21 @@ def test_passing_does_not_disable_future_reviews(monkeypatch, workspace):
     "scenario,expected",
     [
         ("broad_change", "optimized"),
-        ("none", "no_safe_proposal"),
+        ("none", "evidence_missing"),
         ("cooldown", "cooldown"),
-        ("external", "external_active"),
+        ("external", "optimized"),
         ("off", "below"),
     ],
 )
 def test_optimization_guards(monkeypatch, workspace, scenario, expected):
     add_history(workspace)
-    workspace.logic.settings({**ReviewSettings().model_dump(), "auto_optimize": scenario != "off"})
+    workspace.logic.settings(
+        {
+            **ReviewSettings().model_dump(),
+            "auto_optimize": scenario != "off",
+            "cooldown_hours": 24 if scenario == "cooldown" else 0,
+        }
+    )
     old = workspace.logic.current()
     proposal = {**old["parameters"], "ema_fast": 30 if scenario == "broad_change" else 22}
     mock_review(monkeypatch, workspace, 50, None if scenario == "none" else proposal)
@@ -288,7 +294,9 @@ def test_optimization_guards(monkeypatch, workspace, scenario, expected):
             workspace.store.write(db, "v2_managed", {"a": {"btc": {"qty": 1}}})
     assert workspace.logic.review()["action"] == expected
     if expected == "optimized":
-        assert workspace.logic.current()["parameters"]["ema_fast"] == 30
+        assert workspace.logic.current()["parameters"]["ema_fast"] == (
+            30 if scenario == "broad_change" else 22
+        )
         assert workspace.logic.state()["archives"][-1]["version"] == old
     else:
         assert workspace.logic.current() == old
@@ -386,7 +394,7 @@ def test_update_source_validation():
         assert str(request.url).startswith(
             "https://raw.githubusercontent.com/Jk-z-Box/QuantPilot/" + "a" * 40
         )
-        return httpx.Response(200, text='[project]\nversion="0.12.0"\n')
+        return httpx.Response(200, text='[project]\nversion="0.13.0"\n')
 
     result = maintenance.latest(httpx.MockTransport(handler))
     assert result["newer"] and result["commit"] == "a" * 40
