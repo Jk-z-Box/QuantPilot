@@ -32,12 +32,19 @@ def install(app, workspace, session):
         queue = workspace.funds.subscribe()
         previous = {"quotes": {}, "opportunities": {}, "market_status": {}, "candles": {}}
         sequence, last_auth, last_sent, first = 0, 0, 0, True
+        watch, watch_at = {}, 0
         try:
             while True:
                 now = time.time()
                 if now - last_auth >= 5:
                     await asyncio.to_thread(session, connection)
                     last_auth = now
+                # Display subscriptions change rarely; market values still update every cycle.
+                if now - watch_at >= 1 or (
+                    selected["instrument_id"] and selected["instrument_id"] not in watch
+                ):
+                    watch = {i["id"]: i for i in workspace.store.get("v2_watchlist")}
+                    watch_at = now
                 with workspace.lock:
                     current = {
                         "quotes": copy.deepcopy(workspace.quotes),
@@ -53,11 +60,9 @@ def install(app, workspace, session):
                         op["valid"] = False
                         if "行情或机会已过期" not in op.get("blockers", []):
                             op.setdefault("blockers", []).append("行情或机会已过期")
-                current["market_status"] = {
-                    i["id"]: workspace.streams.status(i) for i in workspace.store.get("v2_watchlist")
-                }
+                current["market_status"] = {i["id"]: workspace.streams.status(i) for i in watch.values()}
                 key, frame = selected["instrument_id"], selected["frame"]
-                item = next((i for i in workspace.store.get("v2_watchlist") if i["id"] == key), None)
+                item = watch.get(key)
                 bars = workspace.streams.merge_candles(item, frame, []) if item else []
                 current["candles"] = {"instrument_id": key, "frame": frame, "rows": bars}
                 changed = {}

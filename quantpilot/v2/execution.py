@@ -55,7 +55,7 @@ class ExchangeBroker:
                     {
                         "enableRateLimit": True,
                         "timeout": 8000,
-                        "options": client_options(account.get("settle", "USDT")),
+                        "options": client_options(account.get("settle", "USDT"), account["exchange"]),
                         **credentials,
                     },
                 )
@@ -93,7 +93,7 @@ class ExchangeBroker:
                 "cross_margin",
             )
             ready = (
-                cert["version"] == "0.13.0"
+                cert["version"] == "0.13.1"
                 and cert["exchange"] == account["exchange"]
                 and cert.get("settle") == account.get("settle", "USDT")
                 and (

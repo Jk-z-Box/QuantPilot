@@ -30,7 +30,7 @@ class FuturesMarket:
                 {
                     "enableRateLimit": True,
                     "timeout": 8000,
-                    "options": client_options(settle),
+                    "options": client_options(settle, exchange),
                 },
             )
         return self.clients[key]

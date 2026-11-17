@@ -22,11 +22,13 @@ def client_name(exchange, settle="USDT"):
     return ("binanceusdm" if settle == "USDT" else "binancecoinm") if exchange == "binance" else exchange
 
 
-def client_options(settle="USDT"):
+def client_options(settle="USDT", exchange=None):
     return {
         "defaultType": "swap",
         "defaultSubType": "linear" if settle == "USDT" else "inverse",
         "defaultSettle": settle,
+        # This workspace trades perpetuals only; full spot/options catalogs waste RAM on small VPSes.
+        **({"fetchMarkets": {"types": ["swap"]}} if exchange in ("gate", "okx") else {}),
     }
 
 

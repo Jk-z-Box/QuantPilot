@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -15,6 +16,9 @@ class Store:
         self.directory = directory
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path = directory / "quantpilot.db"
+        # Exclusive checkout: concurrent / nested transactions never share a connection.
+        # Keep a small bounded idle pool instead of reopening SQLite on every price tick.
+        self._connections = queue.LifoQueue(maxsize=8)
         # Create privately before SQLite can create journals or WAL sidecars.
         fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
         os.close(fd)
@@ -46,17 +50,31 @@ class Store:
 
     @contextmanager
     def connect(self):
-        db = sqlite3.connect(self.path, timeout=10)
-        db.row_factory = sqlite3.Row
-        db.execute("PRAGMA busy_timeout=10000")
+        try:
+            db = self._connections.get_nowait()
+        except queue.Empty:
+            db = sqlite3.connect(self.path, timeout=10, check_same_thread=False)
+            db.row_factory = sqlite3.Row
+            db.execute("PRAGMA busy_timeout=10000")
+            db.execute("PRAGMA cache_size=-512")
+        reusable = True
         try:
             yield db
             db.commit()
         except BaseException:
-            db.rollback()
+            try:
+                db.rollback()
+            except sqlite3.Error:
+                reusable = False
             raise
         finally:
-            db.close()
+            if reusable:
+                try:
+                    self._connections.put_nowait(db)
+                except queue.Full:
+                    db.close()
+            else:
+                db.close()
 
     @contextmanager
     def transaction(self):
@@ -75,6 +93,21 @@ class Store:
     def get(self, key):
         with self.connect() as db:
             return self.read(db, key)
+
+    def get_many(self, keys):
+        """One fresh statement/snapshot; values are never served from a TTL cache."""
+        keys = tuple(dict.fromkeys(keys))
+        if not keys:
+            return {}
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT key,value FROM kv WHERE key IN (SELECT value FROM json_each(?))",
+                (json.dumps(keys),),
+            ).fetchall()
+        values = {row["key"]: json.loads(row["value"]) for row in rows}
+        if set(values) != set(keys):
+            raise KeyError("Missing stored configuration")
+        return values
 
     @staticmethod
     def audit(db, event: str, detail: dict):

@@ -141,7 +141,7 @@ def main(argv=None):
             uvicorn.run("quantpilot.app:create_app", factory=True, host=settings.host, port=settings.port,
                         workers=1, proxy_headers=False, access_log=False, log_level="warning",
                         ws="websockets-sansio", ws_max_size=1024, ws_max_queue=8,
-                        ws_ping_interval=20, ws_ping_timeout=20,
+                        ws_ping_interval=20, ws_ping_timeout=20, timeout_graceful_shutdown=10,
                         ssl_certfile=settings.tls_cert, ssl_keyfile=settings.tls_key)
         elif args.command == "status":
             with store.connect() as db:

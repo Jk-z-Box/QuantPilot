@@ -45,6 +45,7 @@ class Workspace:
         self.exchange.signal_frames = self.signal_frames
         self.lock, self.stop_event = threading.RLock(), threading.Event()
         self.quote_wake = threading.Event()
+        self.quote_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="quote-fetch")
         self.streams = MarketStreams(self)
         self.market.streams = self.streams
         self.thread = None
@@ -467,7 +468,6 @@ class Workspace:
 
     def scan(self, item, analyze, prefs):
         key = item["id"]
-        logic = self.logic.current()
         try:
             quote = self.market.quote(item)
         except Exception:
@@ -482,6 +482,7 @@ class Workspace:
             return
         frames, op = None, None
         if analyze:
+            logic = self.logic.current()
             if hasattr(self.market, "derivatives"):
                 try:
                     context = self.market.derivatives(item)
@@ -613,22 +614,22 @@ class Workspace:
                     self.ai_status = "AI 复核暂未完成；已有仓位保护继续运行"
 
     def fast_tick(self):
-        items = self.store.get("v2_watchlist")
-        books = self.store.get("v2_ledgers")
+        stored = self.store.get_many(("v2_watchlist", "v2_ledgers", "v2_managed", "v2_preferences"))
+        items, books = stored["v2_watchlist"], stored["v2_ledgers"]
         held = {k for book in books.values() for k in book["positions"]}
-        held.update(k for positions in self.store.get("v2_managed").values() for k in positions)
-        prefs = self.store.get("v2_preferences")
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            futures = [
-                pool.submit(self.scan, item, False, prefs)
-                for item in items
-                if item["enabled"] or item["id"] in held
-            ]
-            for future in futures:
-                future.result()
+        held.update(k for positions in stored["v2_managed"].values() for k in positions)
+        prefs = stored["v2_preferences"]
+        # Fresh stream events already update the quote cache. Fetch only missing/stale prices.
+        futures = [
+            self.quote_pool.submit(self.scan, item, False, prefs)
+            for item in items
+            if (item["enabled"] or item["id"] in held) and self.streams.quote(item) is None
+        ]
+        for future in futures:
+            future.result()
         journal.sample(self)
         self.execute()
-        self.funds.publish()
+        self.streams.changed.set()  # The shared publisher also covers fills and protection changes.
         self.position_reviews.scheduled()
 
     def review_ai(self, prefs=None):
@@ -887,7 +888,7 @@ class Workspace:
         return {
             "history_scope": self.logic.history_scope(),
             "position_changes": changes,
-            "version": "0.13.0",
+            "version": "0.13.1",
             "now": now,
             "demo": self.market.demo,
             "watchlist": self.store.get("v2_watchlist"),
@@ -974,6 +975,7 @@ class Workspace:
 
     def stop(self):
         self.stop_event.set()
+        self.quote_pool.shutdown(wait=False, cancel_futures=True)
         self.quote_wake.set()
         self.streams.changed.set()
         self.streams.stop()

@@ -175,7 +175,7 @@ class MarketStreams:
                 "timeout": 10000,
                 "newUpdates": True,
                 "verbose": False,
-                "options": client_options(settle),
+                "options": client_options(settle, item["exchange"]),
             },
         )
         tasks = []
@@ -315,11 +315,12 @@ class MarketStreams:
         tasks = {}
         try:
             while True:
-                held = {k for b in self.w.store.get("v2_ledgers").values() for k in b["positions"]}
-                held |= {k for b in self.w.store.get("v2_managed").values() for k in b}
+                stored = self.w.store.get_many(("v2_ledgers", "v2_managed", "v2_watchlist"))
+                held = {k for b in stored["v2_ledgers"].values() for k in b["positions"]}
+                held |= {k for b in stored["v2_managed"].values() for k in b}
                 wanted = {}
-                self.active = {i["id"]: self.key(i) for i in self.w.store.get("v2_watchlist")}
-                for item in self.w.store.get("v2_watchlist"):
+                self.active = {i["id"]: self.key(i) for i in stored["v2_watchlist"]}
+                for item in stored["v2_watchlist"]:
                     if item["enabled"] or item["id"] in held:
                         group = (item["exchange"], settlement(item["symbol"]) == "USDT")
                         wanted.setdefault(group, []).append(item)

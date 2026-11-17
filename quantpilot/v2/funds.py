@@ -206,7 +206,8 @@ class AccountStreams:
         return result
 
     def packets(self):
-        external, books = self.w.store.get("v2_external"), self.w.store.get("v2_ledgers")
+        stored = self.w.store.get_many(("v2_external", "v2_ledgers", "v2_accounts"))
+        external, books = stored["v2_external"], stored["v2_ledgers"]
         with self.w.lock:
             quotes = copy.deepcopy(self.w.quotes)
         return [
@@ -216,12 +217,14 @@ class AccountStreams:
                 if a["kind"] == "paper"
                 else self.display(a, external.get(a["id"], {})),
             }
-            for a in self.w.store.get("v2_accounts").values()
+            for a in stored["v2_accounts"].values()
             if a["kind"] != "paper" or a["id"] in books
         ]
 
     def publish(self):
         with self.lock:
+            if not self.subscribers:
+                return  # Trading/protection runs independently of browser-only valuation.
             self.sequence += 1
             packet = {"sequence": self.sequence, "accounts": self.packets()}
             packet["published_at"] = time.time()
@@ -290,7 +293,7 @@ class AccountStreams:
                 "newUpdates": True,
                 "verbose": False,
                 "options": {
-                    **client_options(settle),
+                    **client_options(settle, account["exchange"]),
                     "watchPositions": {"fetchPositionsSnapshot": False},
                 },
             },
