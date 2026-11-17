@@ -134,7 +134,7 @@ def main(argv=None):
             return service(args.command)
         settings = load_settings()
         path = config_path()
-        store = Store(path.parent, settings.initial_cash)
+        store = None if args.command == "serve" else Store(path.parent, settings.initial_cash)
         if args.command == "serve":
             import uvicorn
 

@@ -20,8 +20,14 @@ class Store:
         # Keep a small bounded idle pool instead of reopening SQLite on every price tick.
         self._connections = queue.LifoQueue(maxsize=8)
         # Create privately before SQLite can create journals or WAL sidecars.
-        fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
-        os.close(fd)
+        # Do not open/close an existing DB outside SQLite: POSIX close() can
+        # release this process's SQLite locks when another Store is still open.
+        try:
+            fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            os.close(fd)
         os.chmod(self.path, 0o600)
         with self.connect() as db:
             db.execute("PRAGMA journal_mode=WAL")

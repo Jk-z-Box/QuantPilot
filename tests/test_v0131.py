@@ -3,12 +3,41 @@
 import asyncio
 import json
 import sqlite3
+import subprocess
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from quantpilot.store import Store
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX SQLite file locks")
+def test_multiple_stores_preserve_cross_process_database_locks(tmp_path):
+    first = Store(tmp_path)
+    second = Store(tmp_path)
+    # A raw open/close of an existing DB releases all POSIX locks owned by this
+    # process. A separate process must still be unable to take SQLite's shared
+    # lock range exclusively after another Store is initialized.
+    result = subprocess.run([  # noqa: S603 -- fixed Python probe and pytest-owned DB path
+        sys.executable, "-c", """
+import fcntl, os, sys
+fd = os.open(sys.argv[1], os.O_RDWR)
+try:
+    fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB, 510, 0x40000002)
+except BlockingIOError:
+    sys.exit(0)
+else:
+    sys.exit(1)
+finally:
+    os.close(fd)
+""", str(first.path),
+    ], timeout=5, check=False)
+    assert result.returncode == 0
+    with second.transaction() as db:
+        second.write(db, "probe", 7)
+    assert first.get("probe") == 7
 
 
 def test_pool_reuses_connection_without_caching_values(tmp_path):
