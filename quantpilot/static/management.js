@@ -143,7 +143,7 @@ async function loadManagement(force = false) {
           "完整交易 / 最低样本",
           `${m.trades} / ${fresh.settings.minimum_trades}`,
         ],
-        ["已实现净盈亏 · USDT", fmt(m.net_pnl)],
+        ["已实现净盈亏 · USD 参考", fmt(m.net_pnl)],
         [
           "盈利因子 / 盈亏比",
           `${fmt(m.profit_factor)} / ${fmt(m.payoff_ratio)}`,
@@ -182,7 +182,7 @@ async function loadManagement(force = false) {
       if (!archiveDirty)
         $("archiveForm").max_backups.value = fresh.settings.max_backups;
       $("logicReviews").innerHTML = fresh.reviews.length
-        ? `<table class="management-table"><thead><tr><th>时间 / 版本</th><th>评分 / 合格线</th><th>结果</th><th>净盈亏</th><th>盈利因子</th><th>盈亏比</th><th>完整交易</th><th>复盘说明</th></tr></thead><tbody>${[
+        ? `<table class="management-table"><thead><tr><th>时间 / 版本</th><th>评分 / 合格线</th><th>结果</th><th>净盈亏 / USD 参考</th><th>盈利因子</th><th>盈亏比</th><th>完整交易</th><th>复盘说明</th></tr></thead><tbody>${[
             ...fresh.reviews,
           ]
             .reverse()
@@ -193,7 +193,7 @@ async function loadManagement(force = false) {
             .join("")}</tbody></table>`
         : '<div class="management-empty">还没有复盘记录。连接 AI 后可立即复盘，或开启定期复盘。</div>';
       $("logicArchives").innerHTML = fresh.archives.length
-        ? `<table class="management-table"><thead><tr><th>存档时间 / 版本</th><th>来源</th><th>原版本评分</th><th>净盈亏</th><th>盈利因子</th><th>盈亏比</th><th>完整交易</th><th>操作</th></tr></thead><tbody>${[
+        ? `<table class="management-table"><thead><tr><th>存档时间 / 版本</th><th>来源</th><th>原版本评分</th><th>净盈亏 / USD 参考</th><th>盈利因子</th><th>盈亏比</th><th>完整交易</th><th>操作</th></tr></thead><tbody>${[
             ...fresh.archives,
           ]
             .reverse()
@@ -472,7 +472,7 @@ $("showLogicEvidence").onclick = () =>
     const e = await api("/api/v2/logic/evidence");
     modal(
       "交易证据与分组统计",
-      `<p class="fine">账户已匿名化。跨版本仓位单独标识，交易所未提供的费用或盈亏显示未知。旧交易只恢复已有记录，不补造当时指标。</p><div class="table-wrap"><table class="management-table"><thead><tr><th>账户 / 品种</th><th>方向 / 版本</th><th>交易数</th><th>净盈亏</th><th>最大盈利占比</th></tr></thead><tbody>${e.groups.map((g) => `<tr><td>${esc(g.account)} · ${esc(g.symbol)}<small>${esc(g.kind)}</small></td><td>${esc(g.side)} · ${esc({ trend_long: "多周期偏多", trend_short: "多周期偏空", mixed_or_flat: "分歧 / 震荡", unknown: "历史状态缺失" }[g.entry_regime] || "未知")}<small>${esc(g.entry_version?.slice(0, 8))} · ${g.attribution === "mixed" ? "跨版本" : "单版本"}</small></td><td>${g.trades}</td><td>${fmt(g.net_pnl)}</td><td>${g.largest_profit_share == null ? "未知" : (g.largest_profit_share * 100).toFixed(1) + "%"}</td></tr>`).join("")}</tbody></table></div><h3>权益采样</h3>${e.equity_curves.map((c) => `<p>${esc(c.account)} · ${c.samples} 个样本 · 观察回撤 ${(c.marked_drawdown_fraction * 100).toFixed(2)}%<br><small>包含入金出金影响；不作为已校正收益率</small></p>`).join("")}<h3>最近完整交易</h3>${e.closed_trade_evidence.map((t) => `<details class="parameter-group"><summary>${esc(t.signal?.symbol || "未知品种")} · ${esc(t.signal?.direction || "未知")} · ${time(t.closed)} · 净盈亏 ${fmt(t.outcome?.trade_net_pnl)}</summary><p>账户 ${esc(t.account)} · 关联版本 ${esc((t.versions || []).map((v) => v?.slice(0, 8)).join(" → "))}</p><p>采样最大浮盈 ${fmt(t.mfe)} / 最大浮亏 ${fmt(t.mae)}</p><p class="fine">缺失：${esc((t.missing || []).join("；") || "已记录入场快照")}</p><details><summary>入场依据与风险快照</summary><pre class="logic-diff">${esc(JSON.stringify({ signal: t.signal, risk: t.risk_and_sizing, account_before: t.account_before, effective_parameters: t.effective_parameters }, null, 2))}</pre></details>${(t.events || []).map((v) => `<details><summary>${time(v.at)} · ${esc({ open: "开仓", add: "加仓", close: "平仓 / 减仓", funding: "资金费", plan_change: "点位调整", strategy_transition: "策略版本变更", native_protection_fill: "交易所保护成交", exchange_fill: "交易所开仓确认" }[v.action] || v.action)}</summary><pre class="logic-diff">${esc(JSON.stringify(v.detail, null, 2))}</pre></details>`).join("")}</details>`).join("") || "<p>暂无完整证据，后续交易将自动记录。</p>"}<h3>最近被拒绝的机会</h3>${e.rejected_opportunities.map((r) => `<p>${time(r.at)} · ${esc(r.detail.signal?.symbol || r.instrument_id)} · ${esc(r.detail.reason)}</p>`).join("") || "<p>暂无记录</p>"}<button type="button" class="secondary" id="closeEvidence">关闭</button>`,
+      `<p class="fine">账户已匿名化。跨版本仓位单独标识，交易所未提供的费用或盈亏显示未知。旧交易只恢复已有记录，不补造当时指标。</p><div class="table-wrap"><table class="management-table"><thead><tr><th>账户 / 品种</th><th>方向 / 版本</th><th>交易数</th><th>净盈亏 / 结算币</th><th>最大盈利占比</th></tr></thead><tbody>${e.groups.map((g) => `<tr><td>${esc(g.account)} · ${esc(g.symbol)}<small>${esc(g.kind)}</small></td><td>${esc(g.side)} · ${esc({ trend_long: "多周期偏多", trend_short: "多周期偏空", mixed_or_flat: "分歧 / 震荡", unknown: "历史状态缺失" }[g.entry_regime] || "未知")}<small>${esc(g.entry_version?.slice(0, 8))} · ${g.attribution === "mixed" ? "跨版本" : "单版本"}</small></td><td>${g.trades}</td><td>${money(g.net_pnl, g.settlement_currency)} ${esc(g.settlement_currency || "USDT")}</td><td>${g.largest_profit_share == null ? "未知" : (g.largest_profit_share * 100).toFixed(1) + "%"}</td></tr>`).join("")}</tbody></table></div><h3>权益采样</h3>${e.equity_curves.map((c) => `<p>${esc(c.account)} · ${esc(c.settlement_currency || "USDT")} · ${c.samples} 个样本 · 观察回撤 ${(c.marked_drawdown_fraction * 100).toFixed(2)}%<br><small>包含入金出金影响；不作为已校正收益率</small></p>`).join("")}<h3>最近完整交易</h3>${e.closed_trade_evidence.map((t) => `<details class="parameter-group"><summary>${esc(t.signal?.symbol || "未知品种")} · ${esc(t.signal?.direction || "未知")} · ${time(t.closed)} · 净盈亏 ${money(t.outcome?.trade_net_pnl, t.settlement_currency)} ${esc(t.settlement_currency || "USDT")}</summary><p>账户 ${esc(t.account)} · 关联版本 ${esc((t.versions || []).map((v) => v?.slice(0, 8)).join(" → "))}</p><p>采样最大浮盈 ${fmt(t.mfe)} / 最大浮亏 ${fmt(t.mae)}</p><p class="fine">缺失：${esc((t.missing || []).join("；") || "已记录入场快照")}</p><details><summary>入场依据与风险快照</summary><pre class="logic-diff">${esc(JSON.stringify({ signal: t.signal, risk: t.risk_and_sizing, account_before: t.account_before, effective_parameters: t.effective_parameters }, null, 2))}</pre></details>${(t.events || []).map((v) => `<details><summary>${time(v.at)} · ${esc({ open: "开仓", add: "加仓", close: "平仓 / 减仓", funding: "资金费", plan_change: "点位调整", strategy_transition: "策略版本变更", native_protection_fill: "交易所保护成交", exchange_fill: "交易所开仓确认" }[v.action] || v.action)}</summary><pre class="logic-diff">${esc(JSON.stringify(v.detail, null, 2))}</pre></details>`).join("")}</details>`).join("") || "<p>暂无完整证据，后续交易将自动记录。</p>"}<h3>最近被拒绝的机会</h3>${e.rejected_opportunities.map((r) => `<p>${time(r.at)} · ${esc(r.detail.signal?.symbol || r.instrument_id)} · ${esc(r.detail.reason)}</p>`).join("") || "<p>暂无记录</p>"}<button type="button" class="secondary" id="closeEvidence">关闭</button>`,
     );
     $("closeEvidence").onclick = () => $("dialog").close();
   });

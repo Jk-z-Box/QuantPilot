@@ -5,6 +5,7 @@ import math
 import statistics
 
 from ..strategy import ema, rsi
+from .contracts import inverse, risk_reward
 from .models import PROFILES
 from .rules import active, effective
 
@@ -311,6 +312,8 @@ def evaluate(item, frames, quote, evidence, profile, now, min_score=80, paramete
         parameters[f"target_{i + 1}"] * t["ratio"] for i, t in enumerate(targets) if t["enabled"]
     )
     rr = (distance * reward_multiple - costs) / (distance + costs)
+    if inverse(item):
+        rr = risk_reward(item["symbol"], entry, stop, targets, direction)
     if active(parameters, "min_rr_override") and rr < (parameters["min_rr_override"] or rule["min_rr"]):
         blockers.append("扣除预估费用后的收益风险比不足")
     if score < min_score:

@@ -15,6 +15,7 @@ from .ai_client import fingerprint, ready
 from .ai_errors import AIError
 from .chatgpt import ChatGPTConnection
 from .codex_client import CodexConnection
+from .contracts import settlement
 from .entry_status import report as entry_report
 from .execution import ExchangeBroker
 from .feeds import Feeds
@@ -23,6 +24,7 @@ from .history import History
 from .limits import contract_limits
 from .logic import LogicEngine
 from .market import FuturesMarket
+from .market_streams import MarketStreams
 from .models import Account, Preferences, defaults, pair_enabled, policy_matches, signal_policy
 from .notifications import Notifications, emit, opportunity_message
 from .position_review import PositionReviews
@@ -42,6 +44,9 @@ class Workspace:
         self.paper.signal_frames = self.signal_frames
         self.exchange.signal_frames = self.signal_frames
         self.lock, self.stop_event = threading.RLock(), threading.Event()
+        self.quote_wake = threading.Event()
+        self.streams = MarketStreams(self)
+        self.market.streams = self.streams
         self.thread = None
         self.quote_thread = None
         self.last_evaluation, self.last_ai = 0, 0
@@ -179,7 +184,9 @@ class Workspace:
                 with self.exchange.locks[aid]:
                     return contract_limits(client, exchange, item["symbol"])
             with self.market.locks[exchange]:
-                return contract_limits(self.market.client(exchange), exchange, item["symbol"])
+                return contract_limits(
+                    self.market.client(exchange, settlement(item["symbol"])), exchange, item["symbol"]
+                )
         except Exception:
             return {
                 "max_leverage": 1,
@@ -249,10 +256,18 @@ class Workspace:
                 s["instrument_id"] not in watch for s in account["sizing"]
             ):
                 raise ValueError("请选择监测列表中的交易对")
-            if account["kind"] != "paper" and any(
-                watch[k]["exchange"] != account["exchange"] for k in account["allowed"]
+            if (account["kind"] != "paper" or account["settle"] != "USDT") and any(
+                watch[k]["exchange"] != account["exchange"]
+                for k in set(account["allowed"]) | {s["instrument_id"] for s in account["sizing"]}
             ):
                 raise ValueError("账户只能授权同一交易所的交易对")
+            if any(
+                settlement(watch[s["instrument_id"]]["symbol"]) != account["settle"]
+                for s in account["sizing"]
+            ):
+                raise ValueError("交易对结算币种与此账户钱包不一致，请为该币种新建结算账户")
+            if old and account["settle"] != old.get("settle", "USDT"):
+                raise ValueError("现有钱包不能更改结算币种，请新建账户")
             if old and (account["kind"], account["exchange"]) != (old["kind"], old["exchange"]):
                 raise ValueError("现有账户不能更换类型或交易所，请新建账户")
             if account["auto"] and account["kind"] != "paper":
@@ -290,7 +305,7 @@ class Workspace:
                 raise ValueError("修改初始资金请使用重置账户")
             accounts[account["id"]] = account
             if account["kind"] == "paper" and account["id"] not in books:
-                books[account["id"]] = ledger(account["capital"])
+                books[account["id"]] = ledger(account["capital"], account["settle"])
             self.store.write(db, "v2_accounts", accounts)
             self.store.write(db, "v2_ledgers", books)
             self.store.audit(
@@ -389,7 +404,7 @@ class Workspace:
                 raise ValueError("只能重置本地模拟账户")
             books = self.store.read(db, "v2_ledgers")
             generation = books[aid]["generation"] + 1
-            books[aid] = {**ledger(capital), "generation": generation}
+            books[aid] = {**ledger(capital, a.get("settle", "USDT")), "generation": generation}
             a["capital"], a["auto"] = capital, False
             self.store.write(db, "v2_accounts", accounts)
             self.store.write(db, "v2_ledgers", books)
@@ -467,6 +482,15 @@ class Workspace:
             return
         frames, op = None, None
         if analyze:
+            if hasattr(self.market, "derivatives"):
+                try:
+                    context = self.market.derivatives(item)
+                    quote = {**context, **quote}
+                    quote["open_interest"] = context.get("open_interest", quote.get("open_interest"))
+                    if context.get("funding_rate") is not None:
+                        quote["funding_rate"] = context["funding_rate"]
+                except Exception:
+                    quote["context_unavailable"] = True
             frames = {}
             for frame in ("1w", "1d", "4h", "1h"):
                 try:
@@ -863,7 +887,7 @@ class Workspace:
         return {
             "history_scope": self.logic.history_scope(),
             "position_changes": changes,
-            "version": "0.12.0",
+            "version": "0.13.0",
             "now": now,
             "demo": self.market.demo,
             "watchlist": self.store.get("v2_watchlist"),
@@ -912,13 +936,30 @@ class Workspace:
                     self.fast_tick()
                 except Exception:
                     self.errors["system"] = "行情或账户执行异常，等待重新核对"
-                self.stop_event.wait(3)
+                self.quote_wake.wait(3)
+                self.quote_wake.clear()
+                self.stop_event.wait(0.1)
 
         self.quote_thread = threading.Thread(target=fast_loop, name="quote-protection", daemon=True)
         self.quote_thread.start()
         self.thread = threading.Thread(target=loop, name="mission-control", daemon=True)
         self.thread.start()
+        self.streams.start()
         self.funds.start()
+
+        def publish_loop():
+            while not self.stop_event.is_set():
+                self.streams.changed.wait(1)
+                self.streams.changed.clear()
+                if self.stop_event.is_set():
+                    break
+                try:
+                    self.funds.publish()
+                except Exception:
+                    self.errors["stream"] = "估值推送暂不可用，正在重新同步"
+                self.stop_event.wait(0.05)
+
+        threading.Thread(target=publish_loop, name="realtime-valuation", daemon=True).start()
         self.research.start()
         self.notifications.start()
 
@@ -933,6 +974,9 @@ class Workspace:
 
     def stop(self):
         self.stop_event.set()
+        self.quote_wake.set()
+        self.streams.changed.set()
+        self.streams.stop()
         self.funds.stop()
         self.action_review.pool.shutdown(wait=False, cancel_futures=True)
         self.position_reviews.pool.shutdown(wait=False, cancel_futures=True)

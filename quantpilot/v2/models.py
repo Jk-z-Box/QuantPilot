@@ -46,9 +46,18 @@ class Instrument(Model):
     id: str = Field(default="", max_length=64, pattern=r"^[a-zA-Z0-9_-]*$")
     label: str = Field(min_length=1, max_length=40)
     exchange: Literal["binance", "okx", "gate"] = "binance"
-    symbol: str = Field(pattern=r"^[A-Z0-9]{1,20}/USDT:USDT$")
+    symbol: str = Field(pattern=r"^[A-Z0-9]{1,20}/(?:USDT|USD):[A-Z0-9]{1,20}$")
     enabled: bool = True
     group: Literal["crypto", "equity"] = "crypto"
+
+    @model_validator(mode="after")
+    def contract_symbol(self):
+        pair, settle = self.symbol.split(":")
+        base, quote = pair.split("/")
+        if not ((quote == settle == "USDT") or (quote == "USD" and settle == base)):
+            raise ValueError("仅支持 USDT 线性永续或以标的币结算的 USD 反向永续")
+        return self
+
     history_enabled: bool = False
     history_interval: int = Field(default=3600, ge=300, le=86400, strict=True)
 
@@ -127,7 +136,8 @@ class Account(Model):
     name: str = Field(min_length=1, max_length=50)
     kind: Literal["paper", "demo", "live"] = "paper"
     exchange: Literal["binance", "okx", "gate"] = "binance"
-    capital: float | None = Field(default=None, ge=100, le=100000000)
+    settle: str = Field(default="USDT", pattern=r"^[A-Z0-9]{1,20}$")
+    capital: float | None = Field(default=None, gt=0, le=100000000)
     auto: bool = False
     ai_action_enabled: bool = False
     balance_stream_enabled: bool = True
@@ -146,7 +156,7 @@ class Account(Model):
             self.profit_trailing_enabled = False
             self.ai_take_profit_enabled = False
         if self.kind == "paper":
-            self.capital = 10000 if self.capital is None else self.capital
+            self.capital = (10000 if self.settle == "USDT" else 1) if self.capital is None else self.capital
         else:
             self.capital = None
         ids = [s.instrument_id for s in self.sizing]
@@ -170,7 +180,7 @@ class AccountSecrets(Model):
 
 
 class Reset(Model):
-    capital: float = Field(ge=100, le=100000000)
+    capital: float = Field(gt=0, le=100000000)
     confirmation: Literal["RESET"]
 
 

@@ -14,6 +14,7 @@ from pydantic import Field
 
 from . import ai_client
 from .ai_errors import AIError
+from .contracts import inverse, risk_reward
 from .entry_status import report
 from .market_review import MarketReview
 from .models import Model, pair_enabled
@@ -420,7 +421,20 @@ class ActionReview:
             if cap * sizing["price"] < 5:
                 raise ValueError("AI 已审核额度不足最小下单金额")
             factor = cap / qty
-            sizing["qty"], sizing["notional"] = cap, cap * sizing["price"]
+            if sizing.get("inverse"):
+                cs, step = D(sizing["contract_size"]), D(sizing["contract_step"])
+                cap = (
+                    (cap * sizing["price"] / cs / step).to_integral_value(rounding="ROUND_DOWN")
+                    * step
+                    * cs
+                    / sizing["price"]
+                )
+                if cap <= 0:
+                    raise ValueError("AI 已审核额度不足一张合约")
+                factor = cap / qty
+                sizing["contracts"] = cap * sizing["price"] / cs
+            sizing["qty"], sizing["notional"] = cap, sizing["notional"] * factor
+            sizing["quote_notional"] = cap * sizing["price"]
             for field in ("initial_margin", "estimated_entry_fee", "estimated_loss_at_stop"):
                 sizing["risk"][field] = str(D(sizing["risk"][field]) * factor)
             sizing["risk"]["available_after"] = str(
@@ -483,6 +497,8 @@ class ActionReview:
         from .rules import effective
 
         rr = (reward - costs) / (distance + costs)
+        if inverse(op):
+            rr = risk_reward(op["symbol"], entry, plan["stop"], plan["targets"], op["direction"])
         if rr < (effective(op.get("parameters"))["min_rr_override"] or PROFILES[op["profile"]]["min_rr"]):
             raise ValueError("AI 调整未通过收益风险比检查")
         plan.update(entry=entry, risk_per_unit=distance, rr=round(rr, 2))

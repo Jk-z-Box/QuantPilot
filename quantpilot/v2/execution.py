@@ -11,6 +11,7 @@ import ccxt
 from ..market import decimal as D
 from . import journal
 from .accounts import ledger, size_order
+from .contracts import base_amount, client_name, client_options, contract_amount, validate_market
 from .funds import snapshot
 from .limits import contract_limits
 from .logic import check_version
@@ -40,15 +41,21 @@ class ExchangeBroker:
         if not credentials:
             raise ValueError("请先保存账户 API 密钥")
         fingerprint = hashlib.sha256(json.dumps(credentials, sort_keys=True).encode()).hexdigest()
-        key = (account["id"], account["exchange"], account["kind"], fingerprint)
+        key = (
+            account["id"],
+            account["exchange"],
+            account["kind"],
+            account.get("settle", "USDT"),
+            fingerprint,
+        )
         with self.guard:
             if key not in self.clients:
                 client = self.factory(
-                    "binanceusdm" if account["exchange"] == "binance" else account["exchange"],
+                    client_name(account["exchange"], account.get("settle", "USDT")),
                     {
                         "enableRateLimit": True,
                         "timeout": 8000,
-                        "options": {"defaultType": "swap"},
+                        "options": client_options(account.get("settle", "USDT")),
                         **credentials,
                     },
                 )
@@ -86,8 +93,21 @@ class ExchangeBroker:
                 "cross_margin",
             )
             ready = (
-                cert["version"] == "0.12.0"
+                cert["version"] == "0.13.0"
                 and cert["exchange"] == account["exchange"]
+                and cert.get("settle") == account.get("settle", "USDT")
+                and (
+                    account.get("settle", "USDT") == "USDT"
+                    or all(
+                        cert["checks"].get(k) is True
+                        for k in (
+                            "inverse_contract_units",
+                            "native_settlement",
+                            "inverse_liquidation",
+                            "coin_partial_exit",
+                        )
+                    )
+                )
                 and cert["credential_fingerprint"] == fingerprint
                 and all(cert["checks"].get(k) is True for k in required)
                 and 0 <= time.time() - cert["verified_at"] < 7 * 86400
@@ -102,10 +122,18 @@ class ExchangeBroker:
         started_at = time.time()
         client = self.client(account)
         with self.locks[account["id"]]:
-            bal = client.fetch_balance({"type": "swap"})
-            positions = client.fetch_positions()
+            settle = account.get("settle", "USDT")
+            params = {
+                "type": "swap",
+                "subType": "linear" if settle == "USDT" else "inverse",
+                "settle": settle.lower(),
+            }
+            bal = client.fetch_balance(params)
+            positions = (
+                client.fetch_positions(params=params) if settle != "USDT" else client.fetch_positions()
+            )
             gate_metadata = (
-                client.privateFuturesGetSettleAccounts({"settle": "usdt"})
+                client.privateFuturesGetSettleAccounts({"settle": settle.lower()})
                 if account["exchange"] == "gate"
                 else None
             )
@@ -165,7 +193,11 @@ class ExchangeBroker:
                 external[aid] = snapshot
                 self.store.write(db, "v2_external", external)
             mode = (
-                {"hedged": client.privateFuturesGetSettleAccounts({"settle": "usdt"}).get("in_dual_mode")}
+                {
+                    "hedged": client.privateFuturesGetSettleAccounts(
+                        {"settle": account.get("settle", "USDT").lower()}
+                    ).get("in_dual_mode")
+                }
                 if account["exchange"] == "gate"
                 else client.fetch_position_mode(item["symbol"])
             )
@@ -218,17 +250,29 @@ class ExchangeBroker:
                 self.action_review.check_size(opportunity, sizing)
             client.load_markets()
             market = client.market(item["symbol"])
-            if not market.get("linear") or not market.get("swap") or market.get("settle") != "USDT":
-                raise ValueError("非受支持的线性永续合约")
-            contract_size = D(market["contractSize"])
-            amount = float(client.amount_to_precision(item["symbol"], str(sizing["qty"] / contract_size)))
+            validate_market(market)
+            if market["settle"] != account.get("settle", "USDT"):
+                raise ValueError("合约与账户结算币种不匹配")
+            amount = float(
+                client.amount_to_precision(
+                    item["symbol"], str(contract_amount(market, sizing["qty"], sizing["price"]))
+                )
+            )
             setting = next(s for s in account["sizing"] if s["instrument_id"] == key)
-            if setting["mode"] == "fixed" and abs(D(amount) * contract_size - sizing["qty"]) > D(
-                ".000000000001"
-            ):
+            if setting["mode"] == "fixed" and abs(
+                base_amount(market, amount, sizing["price"]) - sizing["qty"]
+            ) > D(".000000000001"):
                 raise ValueError("固定币数量不符合交易所数量步长，请调整仓位设置")
             if sizing["leverage"] > 1:
-                total_qty = float(D(amount) * contract_size + (D(existing["qty"]) if existing else 0))
+                total_qty = float(
+                    base_amount(market, amount, sizing["price"])
+                    + (
+                        D(existing["qty"])
+                        * (D(existing["entry"]) / sizing["price"] if market.get("inverse") else 1)
+                        if existing
+                        else 0
+                    )
+                )
                 limits = contract_limits(
                     client, account["exchange"], item["symbol"], float(sizing["price"]) * total_qty, total_qty
                 )
@@ -239,7 +283,7 @@ class ExchangeBroker:
             minimum = market.get("limits", {}).get("amount", {}).get("min")
             min_cost = market.get("limits", {}).get("cost", {}).get("min")
             if (minimum and amount < minimum) or (
-                min_cost and D(amount) * contract_size * sizing["price"] < D(min_cost)
+                min_cost and base_amount(market, amount, sizing["price"]) * sizing["price"] < D(min_cost)
             ):
                 raise ValueError("低于交易所最小订单")
             identity = (
@@ -397,7 +441,7 @@ class ExchangeBroker:
                     managed = self.store.read(db, "v2_managed")
                     positions = managed.setdefault(aid, {})
                     old = positions.get(key)
-                    base_qty = D(filled) * contract_size
+                    base_qty = base_amount(market, filled, order.get("average") or sizing["price"])
                     initial = (
                         old["initial_notional"]
                         if old
@@ -414,7 +458,9 @@ class ExchangeBroker:
                         if old
                         else opportunity.get("logic_version"),
                         "side": opportunity["direction"],
-                        "qty": str(D(position["contracts"]) * contract_size),
+                        "qty": str(base_amount(market, position["contracts"], position["entryPrice"])),
+                        "inverse": bool(market.get("inverse")),
+                        "settle": market["settle"],
                         "entry": str(position["entryPrice"]),
                         "stop": str(sizing["stop"]),
                         "original_qty": str(D(old["original_qty"]) + base_qty if old else base_qty),
@@ -527,8 +573,12 @@ class ExchangeBroker:
 
     def risk_book(self, account, snapshot, instruments):
         aid = account["id"]
+        if account.get("settle", "USDT") != "USDT" and (
+            not snapshot.get("native_equity") or snapshot.get("balance_scope") != account["settle"]
+        ):
+            raise ValueError("币本位账户原生权益或结算钱包未完整核验")
         managed = self.store.get("v2_managed").get(aid, {})
-        book = ledger(snapshot["equity"])
+        book = ledger(snapshot["equity"], account.get("settle", "USDT"))
         book["source"] = "exchange"
         unreal, margin = D(0), D(0)
         for position in snapshot["positions"]:
@@ -549,7 +599,7 @@ class ExchangeBroker:
                 or position.get("marginMode") != mode(original)
             ):
                 raise ValueError("账户持仓方向或保证金模式不一致")
-            qty = D(position["contracts"]) * D(position["contractSize"])
+            qty = base_amount(position, position["contracts"], position["entryPrice"])
             if qty > D(original["qty"]) * D("1.000001"):
                 raise ValueError("发现未登记加仓，暂停自动交易")
             liq, mark = D(position["liquidationPrice"] or 0), D(position["markPrice"] or 0)
@@ -612,7 +662,8 @@ class ExchangeBroker:
                     quantity = D(fill.get("filled") or 0)
                     if quantity <= 0:
                         continue
-                    cs = D(client.market(position["symbol"])["contractSize"])
+                    market = client.market(position["symbol"])
+                    cs = base_amount(market, 1, fill.get("average") or position["entry"])
                     with self.store.transaction() as db:
                         db.execute(
                             "CREATE TABLE IF NOT EXISTS notification_fills(identity TEXT PRIMARY KEY, quantity TEXT NOT NULL)"
@@ -731,8 +782,8 @@ class ExchangeBroker:
                 if not q or q.get("error") or not -5 <= time.time() - q.get("timestamp", 0) <= 15:
                     continue  # Keep exchange-hosted protection active through data outages.
                 qty = D(current["contracts"])
-                cs = D(current["contractSize"])
-                if qty * cs > D(p["qty"]) * D("1.000001") or current["side"] != p["side"]:
+                base_qty = base_amount(current, qty, current["entryPrice"])
+                if base_qty > D(p["qty"]) * D("1.000001") or current["side"] != p["side"]:
                     self.freeze(aid, "仓位数量或方向发生外部变化，停止自动干预")
                     continue
                 if not op and not protection_missing:
@@ -833,7 +884,11 @@ class ExchangeBroker:
                             "filled",
                             {
                                 "instrument_id": key,
-                                "qty": str(D(amount) * cs),
+                                "qty": str(
+                                    base_amount(
+                                        current, amount, confirmed.get("average") or current["entryPrice"]
+                                    )
+                                ),
                                 "price": confirmed.get("average"),
                                 "reason": "risk_exit" if close else "risk_reduce",
                             },
@@ -921,7 +976,7 @@ class ExchangeBroker:
                     and op.get("ai", {}).get("intervention_enabled")
                     and ai_targets
                     and ai_targets != p["targets"]
-                    and qty * cs == D(p["original_qty"])
+                    and base_qty == D(p["original_qty"])
                     and not self.store.get("v2_execution_blocks").get(aid)
                     and all(
                         (D(t["price"]) - D(p["entry"])) * sign > 0

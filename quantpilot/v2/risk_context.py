@@ -2,6 +2,7 @@
 
 import copy
 import time
+from decimal import Decimal
 
 from .accounts import size_order, valuation
 
@@ -26,6 +27,8 @@ def account_context(w, account, raw, key, quote, opportunity, action):
     if not snap["valuation_valid"]:
         raise ValueError("持仓报价不完整或已过期，无法完成账户风险评估")
     data = {
+        "settlement_currency": account.get("settle", "USDT"),
+        "amount_units": "All balances, margin, fees and PnL are in settlement_currency. Inverse qty is base amount at entry; quote face is fixed, current base exposure changes with mark. Do not add balances in different currencies.",
         "account_balance": {
             k: snap[k] for k in ("cash", "equity", "available", "margin", "unrealized", "exposure")
         },
@@ -35,7 +38,7 @@ def account_context(w, account, raw, key, quote, opportunity, action):
         "portfolio_complete": True,
         "portfolio_empty": not snap["positions"],
         "position": next((p for p in snap["positions"] if p["instrument_id"] == key), None),
-        "liquidation_model_note": "模拟及拟开仓强平为 USDT 线性合约估算，维持保证金率 0.5%、平仓费率 0.05%；全仓估算固定其他仓位价格。不是交易所风险档位认证。null 且 no_positive_price 表示正价格范围内无估算强平线，不表示未计算。已有交易所仓位使用交易所实际强平价。",
+        "liquidation_model_note": "模拟及拟开仓强平按合约类型使用线性或反向币本位公式估算，维持保证金率 0.5%、平仓费率 0.05%；全仓估算固定其他仓位价格。不是交易所风险档位认证。null 且 no_positive_price 表示正价格范围内无估算强平线，不表示未计算。已有交易所仓位使用交易所实际强平价。",
     }
     if account["kind"] != "paper":
         data["exchange_reported_balance"] = {k: raw[k] for k in ("equity", "available")}
@@ -53,7 +56,5 @@ def account_context(w, account, raw, key, quote, opportunity, action):
             action == "add",
             prefs["min_score"],
         )
-        data["proposed_order"] = {
-            k: (str(v) if k in ("qty", "notional", "price", "stop") else v) for k, v in order.items()
-        }
+        data["proposed_order"] = {k: (str(v) if isinstance(v, Decimal) else v) for k, v in order.items()}
     return data

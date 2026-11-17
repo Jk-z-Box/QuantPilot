@@ -1,13 +1,13 @@
 # 执行组件验收门槛
 
-0.9.0 已实现订单组件，但没有实际交易所账户凭据，也没有完成交易所测试网联调或独立安全审计。本版交付和生产升级均保持真实下单关闭；不能把自动测试替身的通过写成交易所认证。
+0.13.0 已实现订单组件，但没有实际交易所账户凭据，也没有完成交易所测试网联调或独立安全审计。本版交付和生产升级均保持真实下单关闭；不能把自动测试替身的通过写成交易所认证。
 
 ## 环境隔离
 
 - `paper`：本地虚拟资金，不请求交易所私有订单接口。
 - `demo`：使用 CCXT 对应交易所 sandbox 配置和单独测试密钥；还需进程环境 `QP_DEMO_EXECUTION=1`。测试密钥与生产密钥不可混用。
 - `live`：需 `QP_LIVE_EXECUTION=1`、与当前账户和代码版本绑定的限时验收记录、网页账户启用及品种授权。AI 与网页都不能写入服务环境或验收记录。
-- 只支持线性 USDT 永续、逐仓 / 全仓、单向持仓。未知/外部仓位阻止新增风险。新建账户、重启、发生执行异常后不自动恢复交易。
+- 支持线性 USDT 与币本位 USD 反向永续、逐仓 / 全仓、单向持仓。未知/外部仓位阻止新增风险。新建账户、重启、发生执行异常后不自动恢复交易。
 
 ## 必须实际完成并保存证据
 
@@ -22,7 +22,7 @@
 7. 外部人工更改仓位/订单后锁定；原生保护单清理和人工接管。
 8. 独立代码审查及足够时长的模拟观测，核对真实账户风险限额和权限。
 
-管理员验收记录位于数据目录 `certifications/<account_id>.json`，权限 0600。代码检查版本 `0.9.0`、交易所、当前凭据 JSON 的 SHA-256 指纹、7 天以内的 `verified_at`，以及 `sandbox_fill`、`native_stop`、`partial_take_profit`、`reduce_only`、`reconnect_reconcile`、`timeout_no_duplicate`、`isolated_margin`、`cross_margin` 均为真。记录由完成实际验收的管理员签收；系统不会根据单元测试自动生成。此机制不防御能修改主机代码的管理员。
+管理员验收记录位于数据目录 `certifications/<account_id>.json`，权限 0600。代码检查版本 `0.13.0`、交易所、结算币种 `settle`、当前凭据 JSON 的 SHA-256 指纹、7 天以内的 `verified_at`，以及 `sandbox_fill`、`native_stop`、`partial_take_profit`、`reduce_only`、`reconnect_reconcile`、`timeout_no_duplicate`、`isolated_margin`、`cross_margin` 均为真。币本位还须 `inverse_contract_units`、`native_settlement`、`inverse_liquidation`、`coin_partial_exit` 全部通过。任何旧版本记录都不能启用新版真实下单。记录由完成实际验收的管理员签收；系统不会根据单元测试自动生成。此机制不防御能修改主机代码的管理员。
 
 ## 异常处理
 

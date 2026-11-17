@@ -5,17 +5,13 @@ from __future__ import annotations
 import math
 import time
 
+from .contracts import validate_market
+
 
 def contract_limits(client, exchange, symbol, notional=None, quantity=None):
     client.load_markets()
     market = client.market(symbol)
-    if (
-        not market.get("swap")
-        or not market.get("linear")
-        or market.get("settle") != "USDT"
-        or market.get("active") is False
-    ):
-        raise ValueError("该交易所没有可用的 USDT 线性永续合约")
+    validate_market(market)
     size = float(market.get("contractSize") or 1)
     maximum = market.get("limits", {}).get("leverage", {}).get("max")
     tiers = []
@@ -30,7 +26,13 @@ def contract_limits(client, exchange, symbol, notional=None, quantity=None):
                 raise ValueError("无法核验当前仓位档位的杠杆上限，暂不下单") from None
         if tiers:
             # OKX's minSz/maxSz are contract counts, despite CCXT's Notional field names.
-            exposure = quantity / size if exchange == "okx" and quantity is not None else notional
+            exposure = notional
+            if market.get("inverse") and notional is not None:
+                exposure = notional / size if exchange in ("binance", "okx") else quantity
+                if exposure is None:
+                    raise ValueError("缺少币本位风险档位所需的原生数量")
+            elif exchange == "okx" and quantity is not None:
+                exposure = quantity / size
             valid = [
                 t
                 for t in tiers
@@ -57,8 +59,12 @@ def contract_limits(client, exchange, symbol, notional=None, quantity=None):
         "max_leverage": int(float(maximum)) if verified else 1,
         "verified": verified,
         "contract_size": size,
-        "quantity_step": step,
-        "min_quantity": float(minimum) * size if minimum is not None else None,
+        "inverse": bool(market.get("inverse")),
+        "settle": market["settle"],
+        "contract_step": step / size if step is not None else None,
+        "quantity_step": None if market.get("inverse") else step,
+        "min_contracts": minimum,
+        "min_quantity": float(minimum) * size if minimum is not None and not market.get("inverse") else None,
         "checked_at": time.time(),
         "note": "交易所公布上限；实际下单还会检查仓位档位及风险额度"
         if verified

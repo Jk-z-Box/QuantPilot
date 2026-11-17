@@ -32,6 +32,7 @@ class Metrics(Model):
     trades: int = Field(default=0, ge=0)
     wins: int = Field(default=0, ge=0)
     losses: int = Field(default=0, ge=0)
+    reporting_currency: str = "USD reference (USDT at par)"
     net_pnl: float = 0
     profit_factor: float | None = None
     payoff_ratio: float | None = None

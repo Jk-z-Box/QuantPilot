@@ -77,7 +77,7 @@
           </div>
           <a href="/legacy" class="legacy">旧版模拟账本 ↗</a
           ><button id="logout" class="text-button">退出登录</button
-          ><small>QUANTPILOT 0.12</small>
+          ><small>QUANTPILOT 0.13</small>
         </div>
       </aside>
       <div class="main">
@@ -155,7 +155,7 @@
             <div class="section-line">
               <div>
                 <b>我的监测列表</b
-                ><span class="muted small"> USDT 永续合约</span>
+                ><span class="muted small"> USDT / 币本位永续</span>
               </div>
               <button id="editWatch" class="text-button">管理交易对 ＋</button>
             </div>
@@ -185,6 +185,13 @@
                     </button>
                   </div>
                 </div>
+                <p
+                  id="realtimeStatus"
+                  class="realtime-status muted"
+                  aria-live="off"
+                >
+                  正在连接实时通道
+                </p>
                 <div class="chart-quote">
                   <strong id="chartPrice">—</strong
                   ><span id="chartMeta" class="muted small">等待报价</span>

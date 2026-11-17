@@ -5,6 +5,8 @@ from __future__ import annotations
 import copy
 from decimal import Decimal
 
+from .contracts import settlement
+
 
 def numeric(value):
     try:
@@ -31,16 +33,16 @@ def event_ms(payload, received_ms):
     return value * 1000 if value < 100000000000 else value
 
 
-def balance_fields(exchange, payload):
+def balance_fields(exchange, payload, settle="USDT"):
     info = payload.get("info", {})
     fields = {}
     if exchange == "gate":
         rows = info if isinstance(info, list) else [info]
-        row = next((r for r in rows if r.get("currency", "USDT") == "USDT"), {})
+        row = next((r for r in rows if str(r.get("currency", settle)).upper() == settle), {})
         fields = {"wallet": row.get("balance", row.get("total")), "available": row.get("available")}
     elif exchange == "okx":
         rows = info.get("data", []) if isinstance(info, dict) else info
-        row = next((d for r in rows for d in r.get("details", []) if d.get("ccy") == "USDT"), {})
+        row = next((d for r in rows for d in r.get("details", []) if d.get("ccy") == settle), {})
         fields = {
             "equity": row.get("eq"),
             "unrealized": row.get("upl"),
@@ -48,23 +50,32 @@ def balance_fields(exchange, payload):
             "available": row.get("availEq"),
         }
     elif exchange == "binance" and isinstance(info, dict):
-        row = next((b for b in info.get("a", {}).get("B", []) if b.get("a") == "USDT"), {})
+        row = next((b for b in info.get("a", {}).get("B", []) if b.get("a") == settle), {})
         fields = {"wallet": row.get("wb")}
     return {k: str(numeric(v)) for k, v in fields.items() if numeric(v) is not None}
 
 
-def ingest(events, exchange, method, payload, received_ms):
+def ingest(events, exchange, method, payload, received_ms, settle="USDT"):
     events = copy.deepcopy(events)
     if method == "watch_balance" and isinstance(payload, dict):
-        values = balance_fields(exchange, payload)
+        values = balance_fields(exchange, payload, settle)
         source_ms = event_ms(payload, received_ms)
         for key, value in values.items():
             old = events.setdefault("balance", {}).get(key, {})
             if source_ms >= old.get("source_ms", 0):
-                events["balance"][key] = {"value": value, "received_ms": received_ms, "source_ms": source_ms}
+                events["balance"][key] = {
+                    "value": value,
+                    "received_ms": received_ms,
+                    "source_ms": source_ms,
+                    "native_timestamp": source_ms != received_ms,
+                }
     elif method == "watch_positions" and isinstance(payload, list):
         for p in payload:
-            if not p.get("symbol") or numeric(p.get("contracts")) is None:
+            if (
+                not p.get("symbol")
+                or settlement(p["symbol"]) != settle
+                or numeric(p.get("contracts")) is None
+            ):
                 continue
             raw = p.get("info") or {}
             if numeric(p.get("contracts")) == 0 and raw.get("mode") in ("dual_long", "dual_short"):
@@ -99,6 +110,7 @@ def ingest(events, exchange, method, payload, received_ms):
                 "flat_all": flat_all,
                 "received_ms": received_ms,
                 "source_ms": source_ms,
+                "native_timestamp": source_ms != received_ms,
             }
         # An account can never accumulate an unbounded history of closed symbols.
         if len(events.get("positions", {})) > 256:

@@ -55,6 +55,10 @@ class OAuthImport(Model):
 
 
 def install(app, workspace, session, mutation):
+    from .realtime import install as install_realtime
+
+    install_realtime(app, workspace, session)
+
     def safe(fn, *args):
         try:
             return fn(*args)
@@ -180,11 +184,24 @@ def install(app, workspace, session, mutation):
         return safe(workspace.save_watchlist, [i.model_dump() for i in body.items])
 
     @app.get("/api/v2/markets", dependencies=[Depends(session)])
-    def markets(exchange: str = "binance", q: str = ""):
-        if exchange not in ("binance", "okx", "gate") or len(q) > 30:
+    def markets(
+        exchange: str = "binance",
+        q: str = "",
+        kind: Literal["linear", "inverse"] = "linear",
+        settle: str = "",
+        offset: int = 0,
+        limit: int = 50,
+    ):
+        if (
+            exchange not in ("binance", "okx", "gate")
+            or len(q) > 30
+            or len(settle) > 20
+            or not 0 <= offset <= 10000
+            or not 1 <= limit <= 100
+        ):
             raise HTTPException(422, "参数无效")
         try:
-            return workspace.market.markets(exchange, q)
+            return workspace.market.markets(exchange, q, kind, settle, offset, limit)
         except Exception:
             raise HTTPException(503, "无法读取交易所合约目录，请检查网络与地区可用性") from None
 

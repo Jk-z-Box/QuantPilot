@@ -14,6 +14,7 @@ from decimal import Decimal
 import ccxt.pro as ccxtpro
 
 from .accounts import valuation
+from .contracts import base_amount, client_name, client_options, inverse, settlement
 from .fund_events import apply as apply_events
 from .fund_events import ingest
 
@@ -26,15 +27,16 @@ def number(value):
         return None
 
 
-def gate_info(balance):
+def gate_info(balance, settle="USDT"):
     raw = balance.get("info", {})
     if isinstance(raw, list):
-        return next((r for r in raw if r.get("currency") == "USDT"), raw[0] if raw else {})
-    return raw if isinstance(raw, dict) else {}
+        return next((r for r in raw if str(r.get("currency", "")).upper() == settle), {})
+    return raw if isinstance(raw, dict) and str(raw.get("currency", settle)).upper() == settle else {}
 
 
 def snapshot(account, balance, positions, metadata=None):
-    """Normalize native USDT account equity, not CCXT wallet `total` alone."""
+    """Normalize one native settlement wallet; never combine different collateral currencies."""
+    settle = account.get("settle", "USDT")
     fields = (
         "symbol",
         "side",
@@ -51,15 +53,20 @@ def snapshot(account, balance, positions, metadata=None):
         "initialMargin",
         "maintenanceMargin",
         "maintenanceMarginPercentage",
+        "inverse",
     )
-    out = [{k: p.get(k) for k in fields} for p in positions if number(p.get("contracts"))]
-    usdt = balance.get("USDT", {})
+    out = [
+        {**{k: p.get(k) for k in fields}, "inverse": inverse(p)}
+        for p in positions
+        if number(p.get("contracts")) and settlement(p.get("symbol", "")) == settle
+    ]
+    usdt = balance.get(settle, {})
     equity, available = number(usdt.get("total")), number(usdt.get("free"))
     pnls = [number(p.get("unrealizedPnl")) for p in out]
     unrealized = sum(pnls, Decimal(0)) if all(p is not None for p in pnls) else None
     wallet, native, warning = None, False, None
     if account["exchange"] == "gate":
-        raw = metadata or gate_info(balance)
+        raw = metadata or gate_info(balance, settle)
         for p in out:
             p["hedged"] = raw.get("in_dual_mode", p.get("hedged"))
         wallet = number(raw.get("total"))
@@ -71,11 +78,11 @@ def snapshot(account, balance, positions, metadata=None):
             # Gate documents futures `total` only for classic accounts. Never label unified
             # multi-currency collateral as USDT equity or pass it to the trading risk engine.
             equity, wallet, native = None, None, False
-            warning = "统一账户：此合约接口不提供完整 USDT 权益；权益暂不估算"
+            warning = "统一账户：此合约接口不提供完整结算钱包权益；权益暂不估算"
     elif account["exchange"] == "binance":
         raw = balance.get("info", {})
         assets = raw.get("assets", []) if isinstance(raw, dict) else []
-        usd = next((a for a in assets if a.get("asset") == "USDT"), {})
+        usd = next((a for a in assets if a.get("asset") == settle), {})
         wallet, pnl = number(usd.get("walletBalance")), number(usd.get("unrealizedProfit"))
         if wallet is not None and pnl is not None:
             equity, unrealized, native = wallet + pnl, pnl, True
@@ -85,7 +92,7 @@ def snapshot(account, balance, positions, metadata=None):
         raw = balance.get("info", {})
         data = raw.get("data", []) if isinstance(raw, dict) else []
         details = [d for r in data for d in r.get("details", [])]
-        usd = next((d for d in details if d.get("ccy") == "USDT"), {})
+        usd = next((d for d in details if d.get("ccy") == settle), {})
         if number(usd.get("eq")) is not None:
             equity, unrealized, native = number(usd["eq"]), number(usd.get("upl")), True
             wallet = number(usd.get("cashBal"))
@@ -101,7 +108,8 @@ def snapshot(account, balance, positions, metadata=None):
         "checked_at": time.time(),
         "source": "exchange_account",
         "valuation_source": "exchange",
-        "balance_scope": "USDT",
+        "balance_scope": settle,
+        "settle": settle,
         "balance_warning": warning,
     }
 
@@ -112,14 +120,19 @@ def mark_valuation(base, marks, now=None):
     result, delta, changed = copy.deepcopy(base), Decimal(0), False
     for p in result.get("positions", []):
         mark = marks.get(p.get("symbol"))
-        if not mark or now - mark[1] > 10 or not str(p.get("symbol", "")).endswith(":USDT"):
+        if not mark or now - mark[1] > 10:
             continue
         qty, size, entry, previous = (
             number(p.get(k)) for k in ("contracts", "contractSize", "entryPrice", "unrealizedPnl")
         )
         if None in (qty, size, entry, previous) or p.get("side") not in ("long", "short"):
             continue
-        pnl = (mark[0] - entry) * abs(qty) * size * (1 if p["side"] == "long" else -1)
+        pnl = (
+            abs(qty)
+            * size
+            * (1 / entry - 1 / mark[0] if inverse(p) else mark[0] - entry)
+            * (1 if p["side"] == "long" else -1)
+        )
         delta += pnl - previous
         p.update(markPrice=str(mark[0]), unrealizedPnl=str(pnl))
         changed = True
@@ -146,7 +159,10 @@ class AccountStreams:
         if account["kind"] == "paper" or not account.get("balance_stream_enabled", True) or not credentials:
             return None
         return hashlib.sha256(
-            json.dumps([account["exchange"], account["kind"], credentials], sort_keys=True).encode()
+            json.dumps(
+                [account["exchange"], account["kind"], account.get("settle", "USDT"), credentials],
+                sort_keys=True,
+            ).encode()
         ).hexdigest()
 
     def current(self, aid, identity):
@@ -176,6 +192,17 @@ class AccountStreams:
             ]
         result["data_times"]["price_ms"] = max((v[1] * 1000 for v in marks.values()), default=0)
         result["stream"] = status
+        for p in result.get("positions", []):
+            if (
+                p.get("contracts") is not None
+                and p.get("contractSize")
+                and number(p.get("markPrice"))
+                and number(p["markPrice"]) > 0
+            ):
+                p["current_base_qty"] = str(base_amount(p, p["contracts"], p["markPrice"]))
+                p["quote_face"] = (
+                    str(number(p["contracts"]) * number(p["contractSize"])) if inverse(p) else None
+                )
         return result
 
     def packets(self):
@@ -250,9 +277,12 @@ class AccountStreams:
 
     async def session(self, account, identity):
         aid = account["id"]
+        settle = account.get("settle", "USDT")
+        subtype = "linear" if settle == "USDT" else "inverse"
+        params = {"type": "swap", "subType": subtype, "settle": settle.lower()}
         credentials = self.w.vault.get("v2:account:" + aid)
         client = self.factory(
-            "binanceusdm" if account["exchange"] == "binance" else account["exchange"],
+            client_name(account["exchange"], settle),
             {
                 **credentials,
                 "enableRateLimit": True,
@@ -260,8 +290,7 @@ class AccountStreams:
                 "newUpdates": True,
                 "verbose": False,
                 "options": {
-                    "defaultType": "swap",
-                    "defaultSubType": "linear",
+                    **client_options(settle),
                     "watchPositions": {"fetchPositionsSnapshot": False},
                 },
             },
@@ -304,12 +333,16 @@ class AccountStreams:
 
         async def read_locked():
             read_started_at = time.time()
-            balance = await client.fetch_balance({"type": "swap"})
-            positions = await client.fetch_positions()
+            balance = await client.fetch_balance(params)
+            positions = (
+                await client.fetch_positions(params=params)
+                if subtype == "inverse"
+                else await client.fetch_positions()
+            )
             if account["exchange"] == "gate":
-                raw = gate_info(balance)
+                raw = gate_info(balance, settle)
                 if not raw.get("user"):
-                    raw = await client.privateFuturesGetSettleAccounts({"settle": "usdt"})
+                    raw = await client.privateFuturesGetSettleAccounts({"settle": settle.lower()})
                 client.uid = str(raw["user"])
             else:
                 raw = None
@@ -319,7 +352,11 @@ class AccountStreams:
                 state["base"] = result
                 state["symbols"] = tuple(
                     sorted(
-                        {p["symbol"] for p in result["positions"] if p.get("symbol", "").endswith(":USDT")}
+                        {
+                            p["symbol"]
+                            for p in result["positions"]
+                            if settlement(p.get("symbol", "")) == settle
+                        }
                     )
                 )
                 state["last_read"] = time.monotonic()
@@ -327,14 +364,37 @@ class AccountStreams:
 
         async def watch(method):
             while True:
-                payload = await getattr(client, method)()
+                payload = (
+                    await getattr(client, method)(params=params)
+                    if subtype == "inverse"
+                    else await getattr(client, method)()
+                )
                 received_ms = time.time() * 1000
                 if self.current(aid, identity):
                     with self.lock:
                         self.events[aid] = ingest(
-                            self.events.get(aid, {}), account["exchange"], method, payload, received_ms
+                            self.events.get(aid, {}),
+                            account["exchange"],
+                            method,
+                            payload,
+                            received_ms,
+                            settle,
                         )
                         self.statuses.setdefault(aid, {})["event_at"] = received_ms / 1000
+                    stamps = [
+                        v
+                        for group in self.events.get(aid, {}).values()
+                        for v in group.values()
+                        if isinstance(v, dict) and v.get("native_timestamp")
+                    ]
+                    if stamps:
+                        latest = max(stamps, key=lambda v: v["received_ms"])
+                        with self.lock:
+                            self.statuses.setdefault(aid, {}).update(
+                                self.w.streams.timing(
+                                    account["exchange"], latest["source_ms"], latest["received_ms"]
+                                )
+                            )
                     self.publish()  # Native fields and position changes go out before REST reconciliation.
                 urgent.set()
                 dirty.set()
@@ -388,9 +448,9 @@ class AccountStreams:
                 await asyncio.sleep(1)
                 if account["exchange"] == "binance":
                     # A user-data socket is created only after the authenticated listen-key request.
-                    listen_key = client.options.get("linear", {}).get("listenKey")
+                    listen_key = client.options.get(subtype, {}).get("listenKey")
                     if listen_key:
-                        private = client.clients.get(client.get_private_ws_url("linear", listen_key))
+                        private = client.clients.get(client.get_private_ws_url(subtype, listen_key))
                         if private and private.isConnected:
                             private_clients.add(private)
                             channels.add("user_data")

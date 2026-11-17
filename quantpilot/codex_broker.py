@@ -109,7 +109,7 @@ class Protocol:
             self.call(
                 "initialize",
                 {
-                    "clientInfo": {"name": "quantpilot", "title": "QuantPilot", "version": "0.12.0"},
+                    "clientInfo": {"name": "quantpilot", "title": "QuantPilot", "version": "0.13.0"},
                     "capabilities": {"experimentalApi": True},
                 },
                 15,

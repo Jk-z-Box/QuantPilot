@@ -51,6 +51,8 @@ async function syncFundsClock() {
   }
   fundsClock = best;
 }
+const settleOf = (symbol) => symbol?.split(":")[1] || "USDT";
+const money = (value, settle = "USDT") => fmt(value, settle === "USDT" ? 2 : 8);
 const exchangeName = { binance: "BINANCE", okx: "OKX", gate: "GATE" },
   kindName = { paper: "本地模拟", demo: "交易所测试", live: "真实账户" },
   directions = { long: "做多", short: "做空", wait: "等待", flat: "震荡" };
@@ -178,6 +180,7 @@ function accountPayload(a) {
       "kind",
       "exchange",
       "capital",
+      "settle",
       "auto",
       "balance_stream_enabled",
       "ai_action_enabled",
@@ -244,6 +247,11 @@ $("logout").onclick = () =>
     $("login").hidden = false;
   });
 function stop() {
+  realtimeActive = false;
+  clearTimeout(realtimeRetry);
+  closeRealtimeTransports();
+  cancelAnimationFrame(realtimeFrame);
+  realtimeFrame = null;
   clearInterval(fundsWatchdog);
   clearInterval(fundsClockTimer);
   cancelAnimationFrame(fundsRenderFrame);
@@ -267,14 +275,35 @@ async function start() {
   timer = setInterval(refresh, window.refreshSeconds * 1000);
   chartTimer = setInterval(() => {
     if (page === "market") loadChart();
-  }, 5000);
+  }, 30000);
   await loadChart();
 }
 async function refresh() {
   if (loading) return;
   loading = true;
   try {
-    state = await api("/api/v2/state");
+    const incoming = await api("/api/v2/state"),
+      live = state;
+    for (const item of incoming.watchlist) {
+      const previous = live?.watchlist.find((i) => i.id === item.id);
+      if (
+        previous?.symbol !== item.symbol ||
+        previous?.exchange !== item.exchange
+      )
+        continue;
+      if (
+        (live?.quotes[item.id]?.timestamp || 0) >
+        (incoming.quotes[item.id]?.timestamp || 0)
+      )
+        incoming.quotes[item.id] = live.quotes[item.id];
+      if (
+        (live?.opportunities[item.id]?.evaluated_at || 0) >
+        (incoming.opportunities[item.id]?.evaluated_at || 0)
+      )
+        incoming.opportunities[item.id] = live.opportunities[item.id];
+    }
+    state = incoming;
+    state.market_status = live?.market_status || {};
     if (fundsLatest?.published_at > state.now) mergeFunds(fundsLatest);
     if (!state.watchlist.some((i) => i.id === selected)) {
       selected = state.watchlist[0]?.id || "";
@@ -338,7 +367,7 @@ function renderTiles() {
       const q = state.quotes[i.id],
         o = state.opportunities[i.id],
         fresh = q && !q.error && state.now - q.timestamp <= 15;
-      return `<button class="watch-tile ${i.id === selected ? "selected" : ""}" data-instrument="${esc(i.id)}" aria-pressed="${i.id === selected}"><span class="tile-head">${esc(i.label)}<small>${exchangeName[i.exchange]}</small></span><span class="tile-price">${fresh ? price(q.mid) : "—"}</span><span class="tile-foot"><span>${!i.enabled ? "已停用" : q?.error ? "连接不可用" : !fresh ? "等待新鲜行情" : o?.valid ? "● 有效机会" : "观察中"}</span><b class="${o?.valid ? "positive" : ""}">${o ? o.score + " 分" : "—"}</b></span></button>`;
+      return `<button class="watch-tile ${i.id === selected ? "selected" : ""}" data-instrument="${esc(i.id)}" aria-pressed="${i.id === selected}"><span class="tile-head">${esc(i.label)}<small>${exchangeName[i.exchange]}</small></span><span class="tile-contract">${exchangeName[i.exchange]} · ${settleOf(i.symbol) === "USDT" ? "USDT 本位" : esc(settleOf(i.symbol)) + " 币本位"}</span><span class="tile-price">${fresh ? price(q.mid) : "—"}</span><span class="tile-foot"><span>${!i.enabled ? "已停用" : q?.error ? "连接不可用" : !fresh ? "等待新鲜行情" : o?.valid ? "● 有效机会" : "观察中"}</span><b class="${o?.valid ? "positive" : ""}">${o ? o.score + " 分" : "—"}</b></span></button>`;
     })
     .join("");
   document.querySelectorAll("[data-instrument]").forEach(
@@ -359,8 +388,12 @@ function renderOpportunity() {
   if (!i) return;
   const q = state.quotes[selected],
     o = state.opportunities[selected];
-  $("chartTitle").textContent = i.label + " / USDT";
-  $("chartVenue").textContent = exchangeName[i.exchange] + " · 永续合约";
+  $("chartTitle").textContent = i.symbol.split(":")[0];
+  $("chartVenue").textContent =
+    exchangeName[i.exchange] +
+    (i.symbol.endsWith(":USDT")
+      ? " · USDT 本位永续"
+      : " · 币本位永续 · " + i.symbol.split(":")[1] + " 结算");
   $("chartPrice").textContent = q && !q.error ? price(q.mid) : "—";
   $("chartMeta").textContent =
     q && !q.error && Date.now() / 1000 - q.timestamp > 15
@@ -503,6 +536,7 @@ async function loadChart() {
   const generation = chartGeneration,
     id = selected,
     frame = $("timeframe").value;
+  subscribeRealtime();
   chartBusy = true;
   try {
     const data = await api(
@@ -707,7 +741,8 @@ function fundsDelayLabel() {
     : "正在测量网页链路延迟";
 }
 function streamLabel(a) {
-  if (a.kind === "paper") return "";
+  if (a.kind === "paper")
+    return `<span class="funds-status">本地模拟 · ${fundsConnected ? realtimeTransport + " 实时估值" : "网页连接恢复中"}</span><span class="funds-latency">${fundsDelayLabel()}</span>`;
   const s = a.summary || {},
     st = s.stream || {};
   const status =
@@ -724,13 +759,16 @@ function streamLabel(a) {
     status === "live"
       ? s.valuation_source === "mark_estimate"
         ? "权益 / 浮盈随标记价估算；可用资金以交易所返回为准"
-        : "交易所 USDT 账户数据 · 暂停交易仍实时更新"
+        : `交易所 ${a.settle || "USDT"} 钱包数据 · 暂停交易仍实时更新`
       : status === "disabled"
         ? "已保留最近快照，可手动读取与核对"
         : "以最近核对值展示，连接恢复后重新核对资金";
   const dt = s.data_times || {};
-  const delay = fundsDelayLabel();
-  return `<span class="funds-status ${status === "live" ? "positive" : "muted"}"><i class="dot"></i>${labels[status] || "正在连接"}</span><span class="funds-latency" title="服务器发出到浏览器接收的估算，不包含交易所推送耗时；误差范围来自网络往返测量。">${delay}</span><span>资金接收 ${timeMs(dt.funds_ms || s.checked_at * 1000)} · 仓位接收 ${timeMs(dt.positions_ms || s.checked_at * 1000)}</span><span>可用资金核对 ${timeMs(dt.available_ms || s.checked_at * 1000)}${dt.price_ms ? " · 标记价 " + timeMs(dt.price_ms) : ""}</span>${s.wallet != null ? `<span>钱包余额 ${fmt(s.wallet)} USDT</span>` : ""}${s.pending_reconcile ? "<span>仓位已推送 · 完整资金核对中</span>" : ""}${s.balance_warning ? `<span class="negative">${esc(s.balance_warning)}</span>` : ""}<span>${note}</span>`;
+  const delay =
+    (st.exchange_to_server_ms != null
+      ? `交易所→服务器 约 ${Math.round(st.exchange_to_server_ms)} ms ±${Math.ceil(st.clock_uncertainty_ms || 0)} · `
+      : "") + fundsDelayLabel();
+  return `<span class="funds-status ${status === "live" ? "positive" : "muted"}"><i class="dot"></i>${labels[status] || "正在连接"}</span><span class="funds-latency" title="服务器发出到浏览器接收的估算，不包含交易所推送耗时；误差范围来自网络往返测量。">${delay}</span><span>资金接收 ${timeMs(dt.funds_ms || s.checked_at * 1000)} · 仓位接收 ${timeMs(dt.positions_ms || s.checked_at * 1000)}</span><span>可用资金核对 ${timeMs(dt.available_ms || s.checked_at * 1000)}${dt.price_ms ? " · 标记价 " + timeMs(dt.price_ms) : ""}</span>${s.wallet != null ? `<span>钱包余额 ${money(s.wallet, a.settle)} ${esc(a.settle || "USDT")}</span>` : ""}${s.pending_reconcile ? "<span>仓位已推送 · 完整资金核对中</span>" : ""}${s.balance_warning ? `<span class="negative">${esc(s.balance_warning)}</span>` : ""}<span>${note}</span>`;
 }
 function patchFunds() {
   if (!state) return;
@@ -740,7 +778,7 @@ function patchFunds() {
     for (const field of ["equity", "available", "unrealized"]) {
       const el = card.querySelector(`[data-fund="${field}"]`);
       if (el) {
-        el.textContent = fmt(a.summary?.[field]);
+        el.textContent = money(a.summary?.[field], a.settle);
         if (field === "unrealized")
           el.className =
             Number(a.summary?.[field]) >= 0 ? "positive" : "negative";
@@ -756,9 +794,15 @@ function patchFunds() {
           (p.instrument_id || p.symbol) === row.dataset.positionSymbol &&
           p.side === row.dataset.positionSide,
       );
+      const quantity = row.querySelector("[data-current-base]");
+      if (quantity && p?.current_base_qty != null)
+        quantity.textContent = fmt(p.current_base_qty, 8);
       const el = row.querySelector('[data-label="浮动盈亏"]');
       if (p && el) {
-        el.textContent = fmt(p.unrealized ?? p.unrealizedPnl);
+        el.textContent =
+          money(p.unrealized ?? p.unrealizedPnl, a.settle) +
+          " " +
+          (a.settle || "USDT");
         el.className =
           Number(p.unrealized ?? p.unrealizedPnl) >= 0
             ? "positive"
@@ -781,31 +825,271 @@ function positionShape() {
     ]),
   );
 }
-function startFunds() {
-  fundsEvents = new EventSource("/api/v2/account-events");
-  fundsEvents.onopen = () => {
-    fundsLatest = null;
-    fundsReceivedAt = Date.now();
-    fundsConnected = true;
-    patchFunds();
+let realtimeSocket = null,
+  realtimeRetry = null,
+  realtimePing = null,
+  realtimeActive = false,
+  realtimeEpoch = null,
+  realtimeSequence = 0,
+  realtimeFailures = 0,
+  realtimeTransport = "",
+  realtimeFrame = null,
+  realtimeChartDirty = false,
+  realtimeOpportunityDirty = false,
+  realtimeSamples = [];
+function subscribeRealtime() {
+  if (realtimeSocket?.readyState === WebSocket.OPEN)
+    realtimeSocket.send(
+      JSON.stringify({
+        type: "subscribe",
+        instrument_id: selected,
+        frame: $("timeframe").value,
+      }),
+    );
+  else if (realtimeTransport === "SSE" && realtimeActive) connectRealtime(true);
+}
+function realtimeStatus() {
+  const el = $("realtimeStatus");
+  if (!el) return;
+  const st = state?.market_status?.[selected];
+  const labels = {
+    live: "交易所已连接",
+    connecting: "交易所连接中",
+    reconnecting: "交易所重连中",
+    stale: "交易所数据过期",
+    unavailable: "合约不可用",
   };
-  fundsWatchdog = setInterval(() => {
-    if (Date.now() - fundsReceivedAt > 15000) fundsConnected = false;
+  const sorted = [...realtimeSamples].sort((a, b) => a - b);
+  const p95 = sorted.length
+    ? Math.round(sorted[Math.floor((sorted.length - 1) * 0.95)])
+    : null;
+  el.textContent = `${fundsConnected ? realtimeTransport + " 已连接" : "网页连接恢复中"} · ${state?.demo ? "演示行情" : labels[st?.state] || "行情同步中"}${st?.exchange_to_server_ms != null ? " · 交易所→服务器 " + Math.round(st.exchange_to_server_ms) + " ms（估算 ±" + Math.ceil(st.clock_uncertainty_ms || 0) + " ms）" : ""}${p95 != null ? " · 网页传输 P95 " + p95 + " ms" : ""}`;
+  el.className = "realtime-status " + (fundsConnected ? "positive" : "muted");
+  el.title =
+    "显示实测延迟，不保证交易所每毫秒推送；交易所时间可能存在时钟偏差。网页传输包含时钟校准误差。最近最多 200 个更新包。";
+}
+function receiveRealtime(packet) {
+  fundsReceivedAt = Date.now();
+  fundsConnected = true;
+  if (!state) return;
+  if (packet.epoch !== realtimeEpoch) {
+    if (packet.type !== "snapshot") return;
+    realtimeEpoch = packet.epoch;
+    realtimeSequence = 0;
+  }
+  if (packet.sequence <= realtimeSequence) return;
+  realtimeSequence = packet.sequence;
+  packet.received_wall = Date.now();
+  packet.received_perf = performance.now();
+  state.now = packet.published_at;
+  for (const name of ["quotes", "opportunities", "market_status"]) {
+    if (packet[name])
+      state[name] =
+        packet.type === "snapshot"
+          ? packet[name]
+          : { ...state[name], ...packet[name] };
+    for (const id of packet[name + "_removed"] || []) delete state[name][id];
+  }
+  if (packet.opportunities) realtimeOpportunityDirty = true;
+  if (packet.accounts) {
+    fundsLatest = packet;
+    mergeFunds(packet);
+  }
+  const bars = packet.candles;
+  if (
+    bars?.rows?.length &&
+    bars?.instrument_id === selected &&
+    bars.frame === $("timeframe").value &&
+    rows.length
+  ) {
+    const merged = new Map(rows.map((r) => [r[0], r]));
+    for (const r of bars.rows) if (r[0] >= rows[0][0]) merged.set(r[0], r);
+    const next = [...merged.values()].sort((a, b) => a[0] - b[0]).slice(-420);
+    const span = {
+      "5m": 300000,
+      "15m": 900000,
+      "1h": 3600000,
+      "4h": 14400000,
+      "1d": 86400000,
+      "1w": 604800000,
+    }[bars.frame];
+    if (next.every((r, i) => !i || r[0] - next[i - 1][0] === span)) {
+      rows = next;
+      realtimeChartDirty = true;
+      $("chartFresh").textContent =
+        "交易所 K 线增量 · " + timeMs(packet.published_at * 1000);
+    } else loadChart();
+  }
+  fundsMetrics = {
+    transport: fundsClock
+      ? Math.max(
+          0,
+          packet.received_wall + fundsClock.offset - packet.published_at * 1000,
+        )
+      : 0,
+    render: 0,
+  };
+  if (fundsClock && packet.type !== "heartbeat") {
+    realtimeSamples.push(fundsMetrics.transport);
+    if (realtimeSamples.length > 200) realtimeSamples.shift();
+  }
+  if (realtimeFrame !== null) return;
+  realtimeFrame = requestAnimationFrame(() => {
+    realtimeFrame = null;
+    if (!state) return;
+    const shape = positionShape();
+    if (shape !== window.lastRealtimePositionShape) {
+      renderPositions();
+      window.lastRealtimePositionShape = shape;
+    }
     patchFunds();
-  }, 1000);
-  fundsEvents.addEventListener("heartbeat", () => {
-    fundsReceivedAt = Date.now();
-    fundsConnected = true;
+    if (page === "market") {
+      for (const tile of document.querySelectorAll("[data-instrument]")) {
+        const q = state.quotes[tile.dataset.instrument];
+        tile.querySelector(".tile-price").textContent =
+          q && !q.error && state.now - q.timestamp <= 15 ? price(q.mid) : "—";
+      }
+      const q = state.quotes[selected];
+      if (q)
+        $("chartPrice").textContent =
+          state.now - q.timestamp <= 15 ? price(q.mid) : "—";
+      if (realtimeOpportunityDirty) {
+        renderTiles();
+        renderOpportunity();
+      }
+      if (realtimeChartDirty) drawChart();
+    }
+    realtimeOpportunityDirty = realtimeChartDirty = false;
+    fundsMetrics.render = performance.now() - packet.received_perf;
+    realtimeStatus();
   });
-  fundsEvents.onerror = () => {
-    fundsConnected = false;
-    patchFunds();
-  };
-  fundsEvents.addEventListener("expired", () => {
+}
+function closeRealtimeTransports() {
+  if (realtimeSocket) {
+    realtimeSocket.onclose = null;
+    realtimeSocket.onmessage = null;
+    realtimeSocket.close();
+    realtimeSocket = null;
+  }
+  fundsEvents?.close();
+  fundsEvents = null;
+  clearInterval(realtimePing);
+}
+function connectRealtime(fallback = false) {
+  if (!realtimeActive || document.hidden || !navigator.onLine) return;
+  clearTimeout(realtimeRetry);
+  closeRealtimeTransports();
+  realtimeEpoch = null;
+  realtimeSequence = 0;
+  fundsConnected = false;
+  const expired = () => {
     stop();
     $("app").hidden = true;
     $("login").hidden = false;
-  });
+  };
+  const retry = () => {
+    if (!realtimeActive) return;
+    fundsConnected = false;
+    realtimeStatus();
+    realtimeFailures++;
+    const delay =
+      Math.min(30000, 1000 * 2 ** Math.min(realtimeFailures, 5)) +
+      Math.random() * 500;
+    realtimeRetry = setTimeout(
+      () => connectRealtime(realtimeFailures >= 2),
+      delay,
+    );
+  };
+  if (fallback) {
+    realtimeTransport = "SSE";
+    const events = new EventSource(
+      `/api/v2/realtime-events?instrument_id=${encodeURIComponent(selected)}&frame=${encodeURIComponent($("timeframe").value)}`,
+    );
+    fundsEvents = events;
+    events.onopen = () => {
+      realtimeEpoch = null;
+      realtimeSequence = 0;
+      fundsReceivedAt = Date.now();
+      fundsConnected = true;
+    };
+    events.addEventListener("realtime", (e) => {
+      if (fundsEvents === events) {
+        try {
+          receiveRealtime(JSON.parse(e.data));
+        } catch {
+          events.close();
+          retry();
+        }
+      }
+    });
+    events.addEventListener("expired", expired);
+    events.addEventListener("reconnect", () => {
+      events.close();
+      retry();
+    });
+    events.onerror = () => {
+      events.close();
+      retry();
+    };
+    realtimeRetry = setTimeout(() => connectRealtime(false), 30000);
+    return;
+  }
+  realtimeTransport = "WebSocket";
+  const socket = new WebSocket(
+    `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/v2/realtime`,
+  );
+  realtimeSocket = socket;
+  socket.onopen = () => {
+    fundsReceivedAt = Date.now();
+    fundsConnected = true;
+    subscribeRealtime();
+    realtimePing = setInterval(() => {
+      if (socket.readyState === WebSocket.OPEN)
+        socket.send(JSON.stringify({ type: "ping" }));
+    }, 10000);
+  };
+  socket.onmessage = (event) => {
+    if (realtimeSocket !== socket) return;
+    try {
+      receiveRealtime(JSON.parse(event.data));
+    } catch {
+      socket.close();
+    }
+  };
+  socket.onclose = (event) => {
+    clearInterval(realtimePing);
+    if (event.code === 1008) {
+      api("/api/session").then(retry).catch(expired);
+    } else retry();
+  };
+  socket.onerror = () => {
+    fundsConnected = false;
+  };
+}
+function startFunds() {
+  realtimeActive = true;
+  connectRealtime();
+  fundsWatchdog = setInterval(() => {
+    if (
+      fundsReceivedAt &&
+      Date.now() - fundsReceivedAt > 15000 &&
+      realtimeActive &&
+      !document.hidden &&
+      navigator.onLine
+    ) {
+      fundsReceivedAt = Date.now();
+      connectRealtime(realtimeFailures >= 2);
+    }
+    if (state) {
+      state.now = (Date.now() + (fundsClock?.offset || 0)) / 1000;
+      const op = state.opportunities[selected];
+      if (op)
+        $("expiry").textContent =
+          `${Math.max(0, Math.floor(op.expires_at - state.now))} 秒后过期 · 持续复核`;
+    }
+    patchFunds();
+    realtimeStatus();
+  }, 1000);
   syncFundsClock().catch(() => {
     fundsClock = null;
   });
@@ -816,46 +1100,32 @@ function startFunds() {
       }),
     60000,
   );
-  fundsEvents.addEventListener("accounts", (event) => {
-    try {
-      fundsReceivedAt = Date.now();
-      fundsConnected = true;
-      const packet = JSON.parse(event.data);
-      if (fundsLatest && packet.sequence <= fundsLatest.sequence) return;
-      packet.received_wall = Date.now();
-      packet.received_perf = performance.now();
-      fundsLatest = packet;
-      if (fundsRenderFrame !== null) return;
-      fundsRenderFrame = requestAnimationFrame(() => {
-        fundsRenderFrame = null;
-        const latest = fundsLatest,
-          before = positionShape();
-        if (!latest || !state) return;
-        mergeFunds(latest);
-        if (before !== positionShape()) renderPositions();
-        fundsMetrics = {
-          transport: fundsClock
-            ? Math.max(
-                0,
-                latest.received_wall +
-                  fundsClock.offset -
-                  latest.published_at * 1000,
-              )
-            : 0,
-          render: performance.now() - latest.received_perf,
-        };
-        patchFunds();
-        fundsMetrics.render = performance.now() - latest.received_perf;
-        document.querySelectorAll(".funds-latency").forEach((el) => {
-          el.textContent = fundsDelayLabel();
-        });
-      });
-    } catch {
-      fundsConnected = false;
-      patchFunds();
-    }
-  });
 }
+document.addEventListener("visibilitychange", () => {
+  if (!realtimeActive) return;
+  if (document.hidden) {
+    clearTimeout(realtimeRetry);
+    closeRealtimeTransports();
+    fundsConnected = false;
+  } else {
+    fundsReceivedAt = Date.now();
+    connectRealtime();
+    refresh();
+    loadChart();
+  }
+});
+window.addEventListener("online", () => {
+  if (realtimeActive) {
+    connectRealtime();
+    refresh();
+    loadChart();
+  }
+});
+window.addEventListener("offline", () => {
+  closeRealtimeTransports();
+  fundsConnected = false;
+  realtimeStatus();
+});
 function renderAccounts(force = false) {
   if (
     !force &&
@@ -869,7 +1139,7 @@ function renderAccounts(force = false) {
     accounts
       .map((a) => {
         const s = a.summary || {};
-        return `<article class="card account-card" data-account-card="${a.id}"><div class="card-head"><div><p class="eyebrow">${exchangeName[a.exchange]} · ${kindName[a.kind]}</p><h2>${esc(a.name)}</h2></div><span class="badge ${a.auto ? "good" : a.kind === "live" ? "live" : ""}">${a.auto ? "自动交易运行中" : "已暂停"}</span></div><div class="account-numbers"><div><small>${a.kind === "paper" ? "模拟权益" : "账户权益"} / USDT</small><strong data-fund="equity">${fmt(s.equity)}</strong></div><div><small>可用资金</small><strong data-fund="available">${fmt(s.available)}</strong></div><div><small>浮动盈亏</small><strong data-fund="unrealized" class="${Number(s.unrealized) >= 0 ? "positive" : "negative"}">${fmt(s.unrealized)}</strong></div></div>${a.kind === "paper" ? "" : `<div class="funds-stream" aria-live="off">${streamLabel(a)}</div>`}<p class="account-state">${a.kind === "paper" ? "已启用品种：" + (a.sizing.map((x) => state.watchlist.find((i) => i.id === x.instrument_id)?.label || x.instrument_id).join("、") || "未选择") : "授权交易对：" + (a.allowed.map((id) => state.watchlist.find((i) => i.id === id)?.label || id).join("、") || "未选择")}<br>${(a.sizing.some((x) => x.mode !== "system" && !x.quantity) || !a.sizing.length ? '<span class="negative">请填写币数量或选择由系统评估，再启用自动交易。</span><br>' : "") + esc(a.execution.reason)}${a.last_error ? '<br><span class="negative">' + esc(a.last_error) + "</span>" : ""}</p><p class="fine">交易前 AI 审核：${a.ai_action_enabled ? "已启用 · 行情共享 / 账户风险独立" : "关闭"}</p><p class="fine">持仓 AI 评估：${a.position_review_enabled ? "已启用 · 每 " + a.position_review_interval + " 秒 · " + esc(a.position_review?.message || "等待评估") : "关闭"}</p><div class="account-actions"><button class="${a.auto ? "secondary" : "primary"}" data-toggle-account="${a.id}">${a.auto ? "暂停自动交易" : "启用自动交易"}</button><button class="secondary" data-edit-account="${a.id}">账户设置</button>${a.kind === "paper" ? `<button class="text-button" data-reset-account="${a.id}">重置模拟资金</button>` : `<button class="secondary" data-account-key="${a.id}">API 密钥</button><button class="text-button" data-check-account="${a.id}">读取与核对</button>`}<button class="text-button negative" data-delete-account="${a.id}">删除账户</button></div></article>`;
+        return `<article class="card account-card" data-account-card="${a.id}"><div class="card-head"><div><p class="eyebrow">${exchangeName[a.exchange]} · ${kindName[a.kind]}</p><h2>${esc(a.name)}</h2></div><span class="badge ${a.auto ? "good" : a.kind === "live" ? "live" : ""}">${a.auto ? "自动交易运行中" : "已暂停"}</span></div><div class="account-numbers"><div><small>${a.kind === "paper" ? "模拟权益" : "账户权益"} / ${esc(a.settle || "USDT")}</small><strong data-fund="equity">${money(s.equity, a.settle)}</strong></div><div><small>可用资金</small><strong data-fund="available">${money(s.available, a.settle)}</strong></div><div><small>浮动盈亏</small><strong data-fund="unrealized" class="${Number(s.unrealized) >= 0 ? "positive" : "negative"}">${money(s.unrealized, a.settle)}</strong></div></div><div class="funds-stream" aria-live="off">${streamLabel(a)}</div><p class="account-state">${a.kind === "paper" ? "已启用品种：" + (a.sizing.map((x) => state.watchlist.find((i) => i.id === x.instrument_id)?.label || x.instrument_id).join("、") || "未选择") : "授权交易对：" + (a.allowed.map((id) => state.watchlist.find((i) => i.id === id)?.label || id).join("、") || "未选择")}<br>${(a.sizing.some((x) => x.mode !== "system" && !x.quantity) || !a.sizing.length ? '<span class="negative">请填写币数量或选择由系统评估，再启用自动交易。</span><br>' : "") + esc(a.execution.reason)}${a.last_error ? '<br><span class="negative">' + esc(a.last_error) + "</span>" : ""}</p><p class="fine">交易前 AI 审核：${a.ai_action_enabled ? "已启用 · 行情共享 / 账户风险独立" : "关闭"}</p><p class="fine">持仓 AI 评估：${a.position_review_enabled ? "已启用 · 每 " + a.position_review_interval + " 秒 · " + esc(a.position_review?.message || "等待评估") : "关闭"}</p><div class="account-actions"><button class="${a.auto ? "secondary" : "primary"}" data-toggle-account="${a.id}">${a.auto ? "暂停自动交易" : "启用自动交易"}</button><button class="secondary" data-edit-account="${a.id}">账户设置</button>${a.kind === "paper" ? `<button class="text-button" data-reset-account="${a.id}">重置模拟资金</button>` : `<button class="secondary" data-account-key="${a.id}">API 密钥</button><button class="text-button" data-check-account="${a.id}">读取与核对</button>`}<button class="text-button negative" data-delete-account="${a.id}">删除账户</button></div></article>`;
       })
       .join("") ||
     '<div class="card empty">尚无账户。点击“添加账户”创建模拟或交易所账户。</div>';
@@ -900,7 +1170,7 @@ function renderPositions() {
                 : p.liquidation_status === "no_positive_price"
                   ? "未计划（当前无正价格强平线）"
                   : planned(p.liquidation ?? p.liquidationPrice);
-          return `<tr data-position-account="${a.id}" data-position-symbol="${esc(p.instrument_id || p.symbol)}" data-position-side="${esc(p.side)}"><td data-label="账户 / 市场">${esc(a.name)}<small>${esc(item?.symbol || p.symbol)}</small></td><td data-label="方向 / 数量">${directions[p.side] || esc(p.side)} · ${(p.margin_mode || p.marginMode || "isolated") === "cross" ? "全仓" : "逐仓"} ${fmt(p.leverage, 0)}×<small>${fmt(p.qty ?? (p.contracts != null && p.contractSize != null ? p.contracts * p.contractSize : null), 8)}</small></td><td data-label="开仓均价">${price(p.entry ?? p.entryPrice)}</td><td data-label="浮动盈亏" class="${Number(p.unrealized ?? p.unrealizedPnl) >= 0 ? "positive" : "negative"}">${fmt(p.unrealized ?? p.unrealizedPnl)}${p.price_verified === false ? "<small>行情待验证</small>" : ""}</td><td data-label="当前计划点位" class="position-points">${targetText}<br>止损：${planned(points.stop)}<br>加仓：${planned(points.add_at)}<br>减仓：${planned(points.reduce_at)}<br>${a.kind === "paper" ? "预估强平" : "交易所强平"}：${liquidation}<small>${esc(points.review_status || "未计划")} · 点位不代表已成交</small></td><td data-label="操作">${a.kind === "paper" ? `<button class="text-button" data-close-position="${a.id}" data-position="${esc(p.instrument_id)}">减仓 / 平仓</button>` : "交易所原生保护"}</td></tr>`;
+          return `<tr data-position-account="${a.id}" data-position-symbol="${esc(p.instrument_id || p.symbol)}" data-position-side="${esc(p.side)}"><td data-label="账户 / 市场">${esc(a.name)}<small>${esc(item?.symbol || p.symbol)}</small></td><td data-label="方向 / 数量">${directions[p.side] || esc(p.side)} · ${(p.margin_mode || p.marginMode || "isolated") === "cross" ? "全仓" : "逐仓"} ${fmt(p.leverage, 0)}×<small><span data-current-base>${fmt(p.current_base_qty ?? p.qty ?? (p.contracts != null && p.contractSize != null ? (p.contracts * p.contractSize) / (settleOf(p.symbol) !== "USDT" ? p.markPrice : 1) : null), 8)}</span> ${esc((item?.symbol || p.symbol || "").split("/")[0])}${p.inverse || settleOf(p.symbol || item?.symbol) !== "USDT" ? `<br>${fmt(p.contracts ?? (Number(p.qty) * Number(p.entry)) / Number(p.contract_size), 4)} 张 · 面值 ${fmt(p.quote_face ?? p.contracts * p.contractSize)} USD` : ""}</small></td><td data-label="开仓均价">${price(p.entry ?? p.entryPrice)}</td><td data-label="浮动盈亏" class="${Number(p.unrealized ?? p.unrealizedPnl) >= 0 ? "positive" : "negative"}">${money(p.unrealized ?? p.unrealizedPnl, a.settle)} ${esc(a.settle || "USDT")}${p.price_verified === false ? "<small>行情待验证</small>" : ""}</td><td data-label="当前计划点位" class="position-points">${targetText}<br>止损：${planned(points.stop)}<br>加仓：${planned(points.add_at)}<br>减仓：${planned(points.reduce_at)}<br>${a.kind === "paper" ? "预估强平" : "交易所强平"}：${liquidation}<small>${esc(points.review_status || "未计划")} · 点位不代表已成交</small></td><td data-label="操作">${a.kind === "paper" ? `<button class="text-button" data-close-position="${a.id}" data-position="${esc(p.instrument_id)}">减仓 / 平仓</button>` : "交易所原生保护"}</td></tr>`;
         }),
       )
       .join("") ||
@@ -1065,12 +1335,13 @@ function editAccount(a) {
       .map((x) => `<option value="${x}">${exchangeName[x]}</option>`)
       .join(
         "",
-      )}</select></label><label id="paperCapital">初始模拟资金 / USDT<input name="capital" type="number" min="100" max="100000000" step="any" value="${a?.capital || 10000}" ${a ? "disabled" : ""}></label></div><p id="accountKindHint" class="notice-box"></p><fieldset id="fundsSettings" class="position-review-settings"><legend>交易所资金实时状态</legend><label class="check"><input type="checkbox" name="balanceStream" ${a?.balance_stream_enabled !== false ? "checked" : ""}>开启 WebSocket 实时更新（只读）</label><p class="fine">资金、订单与持仓变化立即推送到网页；暂停自动交易仍保持连接。断线自动重连并核对资金。无需开启实盘下单权限。</p></fieldset><fieldset class="position-review-settings"><legend>每次交易前 AI 审核（账户独立）</legend><label class="check"><input type="checkbox" name="actionReview" ${a?.ai_action_enabled ? "checked" : ""}>启用此账户的交易前 AI 审核</label><p class="fine">只审核本账户已启用的交易对。同一交易所、同一交易对的行情与点位结论共用，各账户资金、强平风险独立审核。Telegram 会分别报告各账户是否获准及成交状态。</p><p class="fine">当前共用评估周期 ${state.preferences.evaluation_interval} 秒，价格重审阈值 ${state.preferences.ai_reaudit_threshold_pct}%。在「数据与 AI」中统一调整。AI 超时或不可用时暂停开仓、加仓；既有止盈止损保护继续。</p></fieldset><fieldset class="position-review-settings"><legend>现有仓位 AI 定期评估</legend><label class="check"><input type="checkbox" name="positionReview" ${a?.position_review_enabled ? "checked" : ""}>启用此账户的持仓 AI 评估</label><label>持仓评估间隔（秒）<input type="number" name="positionInterval" min="60" max="86400" step="1" value="${a?.position_review_interval || 300}" required></label><p class="fine">独立于交易前审核，对本平台管理的现有仓位评估止盈、止损和加减仓点位。加仓仍须账户自动交易和该交易对已启用；未落定时不新增加仓计划，既有保护继续。会消耗当前 AI 连接额度。</p><div class="position-review-options"><label class="check"><input type="checkbox" name="strategyRecheck" ${a?.strategy_recheck_enabled ? "checked" : ""}>策略更新后立即重评现有仓位</label><p class="fine">新逻辑生效后立即排队重评，可保持、调整保护点位、减仓或退出；加仓仍须账户授权。评估失败保留原保护。仅管理本平台已管理的仓位，不接管交易所外部仓位。</p><label class="check"><input type="checkbox" name="profitTrailing" ${a?.profit_trailing_enabled ? "checked" : ""}>盈利移动止损 · 由持仓 AI 评估决定</label><p class="fine">盈利空间足以覆盖估算手续费和滑点时，AI 可设置并移动保护浮盈的止损。止损只向降低回撤的方向移动；不保证获得最大利润。</p><label class="check"><input type="checkbox" name="aiTakeProfit" ${a?.ai_take_profit_enabled ? "checked" : ""}>允许 AI 决定是否分批止盈</label><p class="fine">需此持仓的第一、第二档止盈均已启用。AI 可选择第一档一次止盈，或两档止盈并调整比例；已执行止盈批次不重新分配。两项功能均依赖持仓 AI 评估。</p></div></fieldset><h3>逐交易对设置</h3><p class="muted small">可填写标的数量（例如 0.01 BTC），或选择由系统评估。杠杆与逐仓 / 全仓独立设置，风险偏好仍控制亏损及总敞口。未配置的品种不会自动开仓。</p><div id="sizingRows"></div><div class="dialog-footer"><button type="button" id="cancelAccount" class="secondary">取消</button><button class="primary">保存账户设置</button></div></form>`,
+      )}</select></label><label>结算钱包<select name="settle" ${a ? "disabled" : ""}>${[...new Set(["USDT", "BTC", "ETH", ...state.watchlist.map((i) => settleOf(i.symbol)), a?.settle].filter(Boolean))].map((c) => `<option value="${esc(c)}">${esc(c)} · ${c === "USDT" ? "USDT 本位" : "币本位"}</option>`).join("")}</select><small>不同结算币种分别记账和授权，不混用保证金。</small></label><label id="paperCapital">初始模拟资金 / <span id="capitalUnit">USDT</span><input name="capital" type="number" min="0.00000001" max="100000000" step="any" value="${a?.capital ?? 10000}" ${a ? "disabled" : ""}></label></div><p id="accountKindHint" class="notice-box"></p><fieldset id="fundsSettings" class="position-review-settings"><legend>交易所资金实时状态</legend><label class="check"><input type="checkbox" name="balanceStream" ${a?.balance_stream_enabled !== false ? "checked" : ""}>开启 WebSocket 实时更新（只读）</label><p class="fine">资金、订单与持仓变化立即推送到网页；暂停自动交易仍保持连接。断线自动重连并核对资金。无需开启实盘下单权限。</p></fieldset><fieldset class="position-review-settings"><legend>每次交易前 AI 审核（账户独立）</legend><label class="check"><input type="checkbox" name="actionReview" ${a?.ai_action_enabled ? "checked" : ""}>启用此账户的交易前 AI 审核</label><p class="fine">只审核本账户已启用的交易对。同一交易所、同一交易对的行情与点位结论共用，各账户资金、强平风险独立审核。Telegram 会分别报告各账户是否获准及成交状态。</p><p class="fine">当前共用评估周期 ${state.preferences.evaluation_interval} 秒，价格重审阈值 ${state.preferences.ai_reaudit_threshold_pct}%。在「数据与 AI」中统一调整。AI 超时或不可用时暂停开仓、加仓；既有止盈止损保护继续。</p></fieldset><fieldset class="position-review-settings"><legend>现有仓位 AI 定期评估</legend><label class="check"><input type="checkbox" name="positionReview" ${a?.position_review_enabled ? "checked" : ""}>启用此账户的持仓 AI 评估</label><label>持仓评估间隔（秒）<input type="number" name="positionInterval" min="60" max="86400" step="1" value="${a?.position_review_interval || 300}" required></label><p class="fine">独立于交易前审核，对本平台管理的现有仓位评估止盈、止损和加减仓点位。加仓仍须账户自动交易和该交易对已启用；未落定时不新增加仓计划，既有保护继续。会消耗当前 AI 连接额度。</p><div class="position-review-options"><label class="check"><input type="checkbox" name="strategyRecheck" ${a?.strategy_recheck_enabled ? "checked" : ""}>策略更新后立即重评现有仓位</label><p class="fine">新逻辑生效后立即排队重评，可保持、调整保护点位、减仓或退出；加仓仍须账户授权。评估失败保留原保护。仅管理本平台已管理的仓位，不接管交易所外部仓位。</p><label class="check"><input type="checkbox" name="profitTrailing" ${a?.profit_trailing_enabled ? "checked" : ""}>盈利移动止损 · 由持仓 AI 评估决定</label><p class="fine">盈利空间足以覆盖估算手续费和滑点时，AI 可设置并移动保护浮盈的止损。止损只向降低回撤的方向移动；不保证获得最大利润。</p><label class="check"><input type="checkbox" name="aiTakeProfit" ${a?.ai_take_profit_enabled ? "checked" : ""}>允许 AI 决定是否分批止盈</label><p class="fine">需此持仓的第一、第二档止盈均已启用。AI 可选择第一档一次止盈，或两档止盈并调整比例；已执行止盈批次不重新分配。两项功能均依赖持仓 AI 评估。</p></div></fieldset><h3>逐交易对设置</h3><p class="muted small">可填写标的数量（例如 0.01 BTC），或选择由系统评估。杠杆与逐仓 / 全仓独立设置，风险偏好仍控制亏损及总敞口。未配置的品种不会自动开仓。</p><div id="sizingRows"></div><div class="dialog-footer"><button type="button" id="cancelAccount" class="secondary">取消</button><button class="primary">保存账户设置</button></div></form>`,
   );
   const f = $("accountForm"),
     drafts = new Map();
   f.kind.value = a?.kind || "paper";
   f.exchange.value = a?.exchange || "binance";
+  f.settle.value = a?.settle || "USDT";
   function syncPositionReview() {
     f.strategyRecheck.disabled = !f.positionReview.checked;
     f.profitTrailing.disabled = f.aiTakeProfit.disabled =
@@ -1098,15 +1369,19 @@ function editAccount(a) {
   }
   function populate() {
     const paper = f.kind.value === "paper";
+    $("capitalUnit").textContent = f.settle.value;
     $("paperCapital").hidden = !paper;
     $("fundsSettings").hidden = paper;
     f.capital.disabled = !paper || !!a;
     f.capital.required = paper;
     $("accountKindHint").textContent = paper
-      ? "模拟资金仅在本地记账。可配置所有监测品种；合约杠杆规格按所选模拟交易所核验。"
+      ? "模拟资金仅在本地记账。只配置本钱包结算币种的合约；币本位按实际合约面值换算张数并向下取整，实际币数量随价格变化。"
       : "真实 / 测试账户不需要填写模拟资金。保存后点击账户卡片的「API 密钥」连接交易所，再读取余额；自动下单默认关闭。";
     const items = state.watchlist.filter(
-      (i) => paper || i.exchange === f.exchange.value,
+      (i) =>
+        settleOf(i.symbol) === f.settle.value &&
+        ((paper && f.settle.value === "USDT") ||
+          i.exchange === f.exchange.value),
     );
     $("sizingRows").innerHTML =
       items
@@ -1132,7 +1407,7 @@ function editAccount(a) {
           );
           if (held)
             d.margin_mode = held.margin_mode || held.marginMode || "isolated";
-          return `<div class="sizing-row" data-size-id="${i.id}"><label class="check"><input type="checkbox" class="allowed" ${d.checked ? "checked" : ""}><b>${esc(i.label)}</b><span class="muted small">${esc(i.symbol)} · ${paper ? "启用此交易对" : "授权自动交易"}</span></label><details ${d.open ? "open" : ""}><summary>数量、保证金、杠杆与加仓</summary><div class="sizing-grid"><label>仓位模式<select class="size-mode"><option value="maximum" ${d.mode === "maximum" ? "selected" : ""}>最大总持仓数量</option><option value="fixed" ${d.mode === "fixed" ? "selected" : ""}>固定首次开仓数量</option><option value="system" ${d.mode === "system" ? "selected" : ""}>由系统评估</option></select></label><label class="system-level-label">资金使用偏好<select class="size-level"><option value="conservative" ${d.system_level === "conservative" ? "selected" : ""}>保守 · 预留更多资金</option><option value="balanced" ${d.system_level === "balanced" ? "selected" : ""}>平衡 · 均衡利用资金</option><option value="aggressive" ${d.system_level === "aggressive" ? "selected" : ""}>激进 · 提高资金利用</option></select></label><label class="quantity-label">标的数量 / ${esc(unit)}<input class="size-quantity" type="number" min="0.00000001" max="1000000000" step="any" required value="${esc(d.quantity)}" placeholder="填写 ${esc(unit)} 数量"></label><label>保证金模式<select class="size-margin-mode" ${held ? 'data-held="true"' : ""}><option value="isolated" ${d.margin_mode === "isolated" ? "selected" : ""}>逐仓 · 保证金独立</option><option value="cross" ${d.margin_mode === "cross" ? "selected" : ""}>全仓 · 共享账户保证金</option></select><small class="margin-mode-note">${held ? "当前有持仓，平仓后才能切换模式。" : "仅此交易对生效；已有仓位不自动转换。"}</small></label><label>此交易对杠杆 / 倍<input class="size-leverage" type="number" min="1" max="1000" step="1" required value="${esc(d.leverage)}"></label><div class="limit-control"><button type="button" class="secondary load-limits">读取交易所上限</button><small class="limit-note">尚未核验。高于 1 倍必须通过服务器校验。</small></div><label>最多加仓次数<input class="size-adds" type="number" min="0" max="5" step="1" value="${esc(d.count)}" placeholder="留空：系统评估；0：不加仓"></label><label>每次加仓比例 / %<input class="size-ratios" value="${esc(d.ratios)}" placeholder="例如 25, 20" inputmode="decimal"></label></div><p class="sizing-help"><b>逐仓</b>：只使用分配给该仓位的保证金。<b>全仓</b>：同一账户的全仓仓位共享 USDT 保证金，其他仓位盈亏会影响强平线；逐仓占用资金不参与共享。模拟采用统一费率估算，不等于所选交易所的实际强平价。<br>固定：每次初始开仓按填写数量，风控额度不足则不下单。最大：初始仓位由系统评估，后续加仓也不超过此总数量。<br><b>由系统评估</b>：无需填写币数量。保守 / 平衡 / 激进分别以可用资金的 20% / 40% / 70% 作为本次保证金及开仓费预算上限；止损风险预算分别为当前风险偏好额度的 50% / 75% / 100%。还需通过强平距离、相关敞口及总风险限制，实际用量可能更低。计划加仓时预留额度。<br><b>25, 20</b> 表示两次分别加「初始开仓数量」的 25% 和 20%。例如初始 0.01 BTC，对应 0.0025、0.002 BTC。不是剩余仓位的比例。次数和比例都留空时系统评估；只填次数时每次上限为初始数量的 25%；填 0 禁止加仓。</p></details></div>`;
+          return `<div class="sizing-row" data-size-id="${i.id}"><label class="check"><input type="checkbox" class="allowed" ${d.checked ? "checked" : ""}><b>${esc(i.label)}</b><span class="muted small">${esc(i.symbol)} · ${paper ? "启用此交易对" : "授权自动交易"}</span></label><details ${d.open ? "open" : ""}><summary>数量、保证金、杠杆与加仓</summary><div class="sizing-grid"><label>仓位模式<select class="size-mode"><option value="maximum" ${d.mode === "maximum" ? "selected" : ""}>最大总持仓数量</option><option value="fixed" ${d.mode === "fixed" ? "selected" : ""}>固定首次开仓数量</option><option value="system" ${d.mode === "system" ? "selected" : ""}>由系统评估</option></select></label><label class="system-level-label">资金使用偏好<select class="size-level"><option value="conservative" ${d.system_level === "conservative" ? "selected" : ""}>保守 · 预留更多资金</option><option value="balanced" ${d.system_level === "balanced" ? "selected" : ""}>平衡 · 均衡利用资金</option><option value="aggressive" ${d.system_level === "aggressive" ? "selected" : ""}>激进 · 提高资金利用</option></select></label><label class="quantity-label">标的数量 / ${esc(unit)}<input class="size-quantity" type="number" min="0.00000001" max="1000000000" step="any" required value="${esc(d.quantity)}" placeholder="填写 ${esc(unit)} 数量"></label><label>保证金模式<select class="size-margin-mode" ${held ? 'data-held="true"' : ""}><option value="isolated" ${d.margin_mode === "isolated" ? "selected" : ""}>逐仓 · 保证金独立</option><option value="cross" ${d.margin_mode === "cross" ? "selected" : ""}>全仓 · 共享账户保证金</option></select><small class="margin-mode-note">${held ? "当前有持仓，平仓后才能切换模式。" : "仅此交易对生效；已有仓位不自动转换。"}</small></label><label>此交易对杠杆 / 倍<input class="size-leverage" type="number" min="1" max="1000" step="1" required value="${esc(d.leverage)}"></label><div class="limit-control"><button type="button" class="secondary load-limits">读取交易所上限</button><small class="limit-note">尚未核验。高于 1 倍必须通过服务器校验。</small></div><label>最多加仓次数<input class="size-adds" type="number" min="0" max="5" step="1" value="${esc(d.count)}" placeholder="留空：系统评估；0：不加仓"></label><label>每次加仓比例 / %<input class="size-ratios" value="${esc(d.ratios)}" placeholder="例如 25, 20" inputmode="decimal"></label></div><p class="sizing-help"><b>逐仓</b>：只使用分配给该仓位的保证金。<b>全仓</b>：同一账户的全仓仓位共享本钱包的 ${esc(f.settle.value)} 保证金，其他仓位盈亏会影响强平线；逐仓占用资金不参与共享。模拟采用统一费率估算，不等于所选交易所的实际强平价。<br>固定：每次初始开仓按填写数量，风控额度不足则不下单。最大：初始仓位由系统评估，后续加仓也不超过此总数量。<br><b>由系统评估</b>：无需填写币数量。保守 / 平衡 / 激进分别以可用资金的 20% / 40% / 70% 作为本次保证金及开仓费预算上限；止损风险预算分别为当前风险偏好额度的 50% / 75% / 100%。还需通过强平距离、相关敞口及总风险限制，实际用量可能更低。计划加仓时预留额度。<br><b>25, 20</b> 表示两次分别加「初始开仓数量」的 25% 和 20%。例如初始 0.01 BTC，对应 0.0025、0.002 BTC。不是剩余仓位的比例。次数和比例都留空时系统评估；只填次数时每次上限为初始数量的 25%；填 0 禁止加仓。</p></details></div>`;
         })
         .join("") ||
       '<p class="empty">此交易所尚无监测品种，请先在监测列表添加。</p>';
@@ -1163,10 +1438,15 @@ function editAccount(a) {
             `/api/v2/limits/${r.dataset.sizeId}?exchange=${f.exchange.value}&account_id=${encodeURIComponent(a?.id || "")}`,
           );
           r.querySelector(".size-leverage").max = limits.max_leverage;
-          note.textContent = `${limits.verified ? "最高 " + limits.max_leverage + " 倍。" : "暂只允许 1 倍。"}${limits.min_quantity ? "最小数量 " + limits.min_quantity + "。" : ""}${limits.quantity_step ? "数量步长 " + limits.quantity_step + "。" : ""}${limits.note}`;
+          note.textContent = `${limits.inverse ? "币本位 · 每张 " + limits.contract_size + " USD · 最少 " + (limits.min_contracts || "待核验") + " 张。" : ""}${limits.verified ? "最高 " + limits.max_leverage + " 倍。" : "暂只允许 1 倍。"}${limits.min_quantity ? "最小数量 " + limits.min_quantity + "。" : ""}${limits.quantity_step ? "数量步长 " + limits.quantity_step + "。" : ""}${limits.note}`;
         });
     });
   }
+  f.settle.onchange = () => {
+    readDrafts();
+    if (!a) f.capital.value = f.settle.value === "USDT" ? 10000 : 1;
+    populate();
+  };
   f.kind.onchange = f.exchange.onchange = () => {
     readDrafts();
     populate();
@@ -1216,6 +1496,7 @@ function editAccount(a) {
         name: f.elements.namedItem("name").value.trim(),
         kind: f.kind.value,
         exchange: f.exchange.value,
+        settle: f.settle.value,
         capital: f.kind.value === "paper" ? Number(f.capital.value) : null,
         auto: a?.auto || false,
         balance_stream_enabled: f.balanceStream.checked,
@@ -1259,9 +1540,10 @@ function accountKey(id) {
   };
 }
 function resetAccount(id) {
+  const settle = state.accounts.find((a) => a.id === id)?.settle || "USDT";
   modal(
     "重置模拟账户",
-    `<div class="banner warning">将清空此模拟账户的持仓和资金结果，自动交易会暂停，历史操作记录保留。</div><form id="resetForm"><label>新的虚拟资金 / USDT<input name="capital" type="number" min="100" max="100000000" value="10000" required></label><label>输入 RESET 确认<input name="confirmation" autocomplete="off" pattern="RESET" required placeholder="RESET"></label><button class="primary">重置此模拟账户</button></form>`,
+    `<div class="banner warning">将清空此模拟账户的持仓和资金结果，自动交易会暂停，历史操作记录保留。</div><form id="resetForm"><label>新的虚拟资金 / ${esc(settle)}<input name="capital" type="number" min="0.00000001" step="any" max="100000000" value="${settle === "USDT" ? 10000 : 1}" required></label><label>输入 RESET 确认<input name="confirmation" autocomplete="off" pattern="RESET" required placeholder="RESET"></label><button class="primary">重置此模拟账户</button></form>`,
   );
   $("resetForm").onsubmit = (e) => {
     e.preventDefault();
@@ -1341,13 +1623,13 @@ $("editWatch").onclick = () => {
   let draft = structuredClone(state.watchlist);
   modal(
     "管理监测列表",
-    `<p class="muted">输入交易所的统一合约名称，例如 BTC/USDT:USDT。可以编辑名称、交易所或添加其他品种。</p><div id="watchEditor"></div><button id="appendWatch" class="text-button">＋ 添加一个交易对</button><details class="market-search"><summary>查找交易所支持的永续合约</summary><div class="form-grid"><label>交易所<select id="searchExchange">${Object.keys(
+    `<p class="muted">搜索合约后勾选添加，再保存监测列表。添加监测不会自动授权账户交易。</p><section class="market-search"><div class="form-grid"><label>交易所<select id="searchExchange">${Object.keys(
       exchangeName,
     )
       .map((x) => `<option value="${x}">${exchangeName[x]}</option>`)
       .join(
         "",
-      )}</select></label><label>关键字<input id="searchQuery" placeholder="BTC / AVGO / SOXL"></label></div><button id="searchMarkets" class="secondary">查询合约目录</button><div id="marketSearchResults" class="small muted"></div></details><div class="dialog-footer"><button id="saveWatch" class="primary">保存监测列表</button></div>`,
+      )}</select></label><label>合约类型<select id="searchKind"><option value="linear">USDT 本位永续</option><option value="inverse">币本位永续</option></select></label><label>搜索交易对<input id="searchQuery" placeholder="例如 BTC、ETH、AVGO" maxlength="30" type="search"></label><label>结算币筛选<input id="searchSettle" placeholder="全部；例如 BTC" maxlength="20"></label></div><button id="searchMarkets" class="secondary">搜索交易所合约</button><p id="searchStatus" class="fine" role="status"></p><div id="marketSearchResults"></div><div class="search-actions"><button id="searchPrevious" class="secondary" disabled>上一页</button><button id="searchNext" class="secondary" disabled>下一页</button><button id="addSelectedMarkets" class="primary" disabled>添加已选</button></div></section><h3>我的监测列表</h3><div id="watchEditor"></div><button id="appendWatch" class="text-button">＋ 手动填写交易对</button><div class="dialog-footer"><button id="saveWatch" class="primary">保存监测列表</button></div>`,
   );
   function read() {
     document.querySelectorAll("[data-watch-index]").forEach((r) => {
@@ -1411,13 +1693,106 @@ $("editWatch").onclick = () => {
       rows = [];
       loadChart();
     });
-  $("searchMarkets").onclick = () =>
+  let offset = 0,
+    found = [],
+    total = 0,
+    searchKey = "",
+    generation = 0;
+  const chosen = new Map(),
+    cache = new Map();
+  function drawSearch() {
+    $("marketSearchResults").innerHTML =
+      found
+        .map((m, n) => {
+          const key = searchKey + ":" + m.symbol;
+          const added = draft.some(
+            (i) => i.exchange === m.exchange && i.symbol === m.symbol,
+          );
+          return `<label class="market-result"><input type="checkbox" data-market-result="${n}" ${added ? "disabled checked" : chosen.has(key) ? "checked" : ""}><span><b>${esc(m.symbol)}</b><small>${esc(m.exchange.toUpperCase())} · ${esc(m.settle)} 结算 · 每张 ${esc(m.contract_size)} ${m.inverse ? "USD" : esc(m.base)}</small></span><span class="badge">${added ? "已添加" : m.inverse ? "币本位" : "USDT 本位"}</span></label>`;
+        })
+        .join("") || '<p class="empty">没有匹配的已上市合约</p>';
+    $("searchStatus").textContent =
+      `共 ${total} 个结果 · 第 ${Math.floor(offset / 30) + 1} 页 · 已选 ${chosen.size} 个 · 目录由交易所提供`;
+    $("searchPrevious").disabled = offset === 0;
+    $("searchNext").disabled = offset + 30 >= total;
+    $("addSelectedMarkets").disabled = chosen.size === 0;
+    document.querySelectorAll("[data-market-result]").forEach(
+      (box) =>
+        (box.onchange = () => {
+          const m = found[Number(box.dataset.marketResult)],
+            key = searchKey + ":" + m.symbol;
+          if (box.checked) chosen.set(key, m);
+          else chosen.delete(key);
+          drawSearch();
+        }),
+    );
+  }
+  async function search(reset = true) {
+    read();
+    if (reset) offset = 0;
+    const exchange = $("searchExchange").value;
+    const query = new URLSearchParams({
+      exchange,
+      kind: $("searchKind").value,
+      q: $("searchQuery").value.trim(),
+      settle: $("searchSettle").value.trim().toUpperCase(),
+      offset,
+      limit: 30,
+    }).toString();
+    const current = ++generation;
+    $("searchStatus").textContent = "正在读取交易所目录…";
+    const data = cache.get(query) || (await api("/api/v2/markets?" + query));
+    if (current !== generation || !$("marketSearchResults")) return;
+    cache.set(query, data);
+    searchKey = exchange;
+    total = data.total;
+    found = data.items.map((m) => ({ ...m, exchange }));
+    drawSearch();
+  }
+  $("searchMarkets").onclick = () => action(() => search());
+  $("searchQuery").onkeydown = (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      action(() => search());
+    }
+  };
+  $("searchPrevious").onclick = () =>
+    action(() => {
+      offset -= 30;
+      return search(false);
+    });
+  $("searchNext").onclick = () =>
+    action(() => {
+      offset += 30;
+      return search(false);
+    });
+  $("addSelectedMarkets").onclick = () =>
     action(async () => {
-      const result = await api(
-        `/api/v2/markets?exchange=${$("searchExchange").value}&q=${encodeURIComponent($("searchQuery").value)}`,
+      read();
+      const incoming = [...chosen.values()].filter(
+        (m) =>
+          !draft.some(
+            (i) => i.exchange === m.exchange && i.symbol === m.symbol,
+          ),
       );
-      $("marketSearchResults").textContent =
-        result.map((x) => x.symbol).join(" · ") || "没有匹配的已上市合约";
+      if (draft.length + incoming.length > 20)
+        throw Error("最多监测 20 个交易对，请减少勾选或移除旧交易对");
+      draft.push(
+        ...incoming.map((m) => ({
+          id: "",
+          label: m.base,
+          exchange: m.exchange,
+          symbol: m.symbol,
+          enabled: true,
+          group: ["AVGO", "SOXL"].includes(m.base) ? "equity" : "crypto",
+          history_enabled: false,
+          history_interval: 3600,
+        })),
+      );
+      chosen.clear();
+      draw();
+      drawSearch();
+      toast("已加入待保存列表，请点击保存监测列表");
     });
 };
 let chatgptPairBaseline = null;

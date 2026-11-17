@@ -115,3 +115,24 @@ bash -o pipefail -c 'curl --proto "=https" --tlsv1.2 -fsSL https://raw.githubuse
 ### 启用 GitHub Actions
 
 CI 保存在 `ci/github-actions.yml` 作为模板。通过具备相应权限的 OAuth、GitHub 连接或其他正常授权，将该文件移动至 `.github/workflows/ci.yml` 并提交后，才会触发 CI。是否通过以该提交的 Actions 实际结果为准。
+
+## WebSocket 与 SSE 反向代理
+
+0.13.0 网页优先连接同域 `/api/v2/realtime`，失败时使用 `/api/v2/realtime-events`。Nginx 在 `http` 上下文设置映射，并在现有反向代理 location 增加以下配置（保留原 TLS、域名和 proxy_pass）：
+
+```nginx
+map $http_upgrade $qp_connection_upgrade {
+    default upgrade;
+    '' close;
+}
+# 以下放在现有 location / { ... } 内
+proxy_http_version 1.1;
+proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection $qp_connection_upgrade;
+proxy_set_header Host $http_host;
+proxy_read_timeout 75s;
+proxy_send_timeout 15s;
+proxy_buffering off;
+```
+
+`$http_host` 保留客户端端口，便于应用严格校验 WebSocket Origin。更新后先 `nginx -t`，成功再 reload。Cloudflare 启用 WebSockets，Origin Rule 继续指向 TLS 源站监听端口。不要为实时接口启用缓存或跨域访问；不要以降低 SSL 加密模式解决 Upgrade 配置问题。应用每 5 秒发送心跳，浏览器也主动 ping；断线后自动重连并重新获取快照。需通过最终 HTTPS 域名验证 101 Upgrade、SSE 事件、会话失效和断线恢复。

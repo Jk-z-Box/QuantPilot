@@ -6,6 +6,7 @@ import hashlib
 import json
 import time
 
+from .contracts import pnl as position_pnl
 from .rules import effective_view
 
 
@@ -35,6 +36,8 @@ def entry(db, aid, key, trade_id, account, op, quote, sizing, before, after, add
     if not adding:
         detail = {
             "schema": 1,
+            "settlement_currency": account.get("settle", "USDT"),
+            "reporting_note": "Native trade PnL and collateral valuation are separate. Reporting PnL translates each cashflow at its execution mark; USDT at par with USD. Collateral price appreciation is excluded.",
             "bars": bars or {},
             "history_sources": op.get("history", {}),
             "signal": {
@@ -223,8 +226,7 @@ def sample(workspace):
                 if not row:
                     continue
                 data = json.loads(row[0])
-                sign = 1 if p["side"] == "long" else -1
-                unreal = (float(q["mid"]) - float(p["entry"])) * float(p["qty"]) * sign
+                unreal = float(position_pnl(p, q["mid"]))
                 data["mfe"] = max(data["mfe"] if data["mfe"] is not None else unreal, unreal)
                 data["mae"] = min(data["mae"] if data["mae"] is not None else unreal, unreal)
                 data["mark_samples"] += 1
@@ -277,6 +279,7 @@ def review_evidence(store, start, end):
                 r["version"],
                 "mixed" if len(d.get("versions", [])) > 1 else "single",
                 regime,
+                d.get("settlement_currency", "USDT"),
             )
             net = d.get("outcome", {}).get("trade_net_pnl")
             if net is not None:
@@ -292,6 +295,7 @@ def review_evidence(store, start, end):
                     "entry_version": key[4],
                     "attribution": key[5],
                     "entry_regime": key[6],
+                    "settlement_currency": key[7],
                     "trades": len(vals),
                     "net_pnl": sum(vals),
                     "wins": sum(v > 0 for v in vals),
@@ -318,6 +322,7 @@ def review_evidence(store, start, end):
             curves.append(
                 {
                     "account": hashlib.sha256(aid.encode()).hexdigest()[:8],
+                    "settlement_currency": store.get("v2_accounts").get(aid, {}).get("settle", "USDT"),
                     "samples": len(points),
                     "marked_drawdown_fraction": drawdown,
                     "first_at": points[0]["at"] if points else None,

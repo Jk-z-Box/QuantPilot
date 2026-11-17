@@ -13,6 +13,7 @@ from pydantic import Field
 
 from . import ai_client, journal
 from .accounts import FEE, SLIP
+from .contracts import base_amount, inverse
 from .models import PROFILES, Model, pair_enabled
 from .position_changes import position_guard, record_changes
 from .rules import active, effective, effective_view
@@ -40,7 +41,9 @@ def profit_context(position, quote):
     sign = 1 if position["side"] == "long" else -1
     entry, fee, slip = float(position["entry"]), float(FEE), float(SLIP)
     breakeven = entry * (1 + sign * fee) / ((1 - sign * slip) * (1 - sign * fee))
-    executable = quote.get("bid" if sign == 1 else "ask", quote["mid"])
+    if inverse(position):
+        breakeven = entry * (sign + fee) / ((sign - fee) * (1 - sign * slip))
+    executable = quote.get("bid" if sign == 1 else "ask", quote.get("mid"))
     return {
         "breakeven": breakeven,
         "net_profitable": (executable - breakeven) * sign > 0,
@@ -70,7 +73,11 @@ class PositionReviews:
         snapshot = read("v2_external").get(account["id"], {})
         for p in result.values():
             actual = next((x for x in snapshot.get("positions", []) if x.get("symbol") == p["symbol"]), {})
-            p["external_qty"] = float(actual.get("contracts") or 0) * float(actual.get("contractSize") or 0)
+            p["external_qty"] = (
+                float(base_amount(actual, actual["contracts"], actual.get("entryPrice") or p["entry"]))
+                if actual.get("contracts")
+                else 0
+            )
             p["external_side"] = actual.get("side")
         return result
 

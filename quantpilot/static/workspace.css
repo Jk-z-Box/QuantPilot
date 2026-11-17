@@ -2406,3 +2406,108 @@ dialog[open] {
   font-size: 12px;
   padding: 6px 0;
 }
+
+/* Settlement wallets and searchable contract directory. */
+.realtime-status {
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  margin: 4px 0 12px;
+}
+.market-search {
+  border: 1px solid var(--line, #dce7e2);
+  border-radius: 14px;
+  padding: 16px;
+  margin-bottom: 24px;
+}
+.market-result {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 4px;
+  border-bottom: 1px solid #e7eeeb;
+  cursor: pointer;
+}
+.market-result input {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+}
+.market-result > span:first-of-type {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.market-result small {
+  display: block;
+  font-size: 11px;
+  color: #708a80;
+  margin-top: 4px;
+}
+.search-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+.account-numbers > div {
+  min-width: 0;
+}
+.account-numbers strong {
+  font-size: clamp(16px, 1.8vw, 26px);
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 600px) {
+  .market-search {
+    padding: 12px;
+  }
+  .market-result .badge {
+    font-size: 10px;
+    padding: 4px;
+  }
+  .search-actions > button {
+    flex: 1;
+  }
+  .account-numbers strong {
+    font-size: clamp(15px, 4vw, 20px);
+  }
+  .realtime-status {
+    font-size: 10px;
+  }
+}
+.tile-contract {
+  display: block;
+  font-size: 10px;
+  color: #6d877d;
+  margin-top: 4px;
+}
+@media (max-width: 600px) {
+  .market-search .form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .market-search .form-grid label {
+    margin: 0;
+    gap: 6px;
+    font-size: 12px;
+  }
+  .market-search .form-grid select,
+  .market-search .form-grid input {
+    min-width: 0;
+    width: 100%;
+    padding: 9px 7px;
+    font-size: 14px;
+  }
+  .market-search > button {
+    margin-top: 12px;
+  }
+}
+.market-result {
+  flex-direction: row;
+  text-align: left;
+}
+.market-result > input {
+  margin: 0;
+}

@@ -8,6 +8,8 @@ import time
 
 from ..market import decimal as D
 from . import journal
+from .contracts import entry_position, inverse, native_notional, settlement
+from .contracts import pnl as position_pnl
 from .logic import check_version
 from .margin import CLOSE_FEE_RATE, MAINTENANCE_RATE, estimates, mode
 from .models import PROFILES, pair_enabled, policy_matches
@@ -24,13 +26,15 @@ SYSTEM_LEVELS = {
 }
 
 
-def ledger(capital):
+def ledger(capital, settle="USDT"):
     return {
+        "settle": settle,
         "cash": str(capital),
         "initial": str(capital),
         "positions": {},
         "fees": "0",
         "realized": "0",
+        "realized_reporting": "0",
         "day": "",
         "day_equity": str(capital),
         "generation": 0,
@@ -50,8 +54,10 @@ def valuation(book, quotes, now):
         fresh = bool(q and not q.get("error") and -5 <= now - q.get("timestamp", 0) <= 15)
         valid = valid and fresh
         price = D(q["bid"] if p["side"] == "long" else q["ask"]) if fresh else D(p["entry"])
-        qty, entry = D(p["qty"]), D(p["entry"])
-        pnl = (price - entry) * qty * (1 if p["side"] == "long" else -1)
+        qty = D(p["qty"])
+        if fresh and q.get("mark") and -5 <= now - q.get("mark_timestamp", 0) <= 15 and D(q["mark"]) > 0:
+            price = D(q["mark"])
+        pnl = position_pnl(p, price)
         marks[key] = price
         if mode(p) == "cross":
             cross_unreal += pnl
@@ -59,13 +65,16 @@ def valuation(book, quotes, now):
             pnl = max(pnl, -D(p["margin"]))
         unreal += pnl
         margin += D(p["margin"])
-        exposure += abs(qty * price)
+        exposure += abs(native_notional(p, price))
         positions.append(
             {
                 **p,
                 "instrument_id": key,
                 "unrealized": str(pnl),
                 "mark": str(price),
+                "settle": book.get("settle", "USDT"),
+                "current_base_qty": str(qty * D(p["entry"]) / price if inverse(p) else qty),
+                "quote_face": str(qty * D(p["entry"])) if inverse(p) else None,
                 "price_verified": fresh,
                 "margin_mode": mode(p),
             }
@@ -85,6 +94,7 @@ def valuation(book, quotes, now):
         )
         p["liquidation_verified"] = p["price_verified"] and (valid or mode(p) == "isolated")
     return {
+        "settle": book.get("settle", "USDT"),
         "equity": str(cash + unreal),
         "available": str(cash + cross_unreal - margin),
         "exposure": str(exposure),
@@ -111,6 +121,12 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
         raise ValueError("交易机会无效或已过期")
     key = opportunity["instrument_id"]
     item = instruments[key]
+    coin = inverse(item)
+    settle = settlement(item["symbol"])
+    if settle != account.get("settle", "USDT") or settle != book.get("settle", "USDT"):
+        raise ValueError("账户、账本与合约的结算币种不一致")
+    if coin and item["exchange"] != account["exchange"]:
+        raise ValueError("币本位账户只能交易同一交易所的合约，避免合约面值混用")
     if (opportunity.get("exchange"), opportunity.get("symbol")) != (item["exchange"], item["symbol"]):
         raise ValueError("交易对配置已变化，等待重新评估")
     if account["kind"] != "paper" and (
@@ -145,6 +161,7 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
         and not D(plan["entry_low"]) * D(".999") <= price <= D(plan["entry_high"]) * D("1.001")
     ):
         raise ValueError("价格已离开入场区间")
+    unit = D(1) if coin else price
     sizing = next((s for s in account["sizing"] if s["instrument_id"] == key), None)
     if not sizing or (sizing.get("mode") != "system" and not sizing.get("quantity")):
         raise ValueError("请先为此交易对设置币数量和杠杆")
@@ -183,10 +200,7 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
         else D(sizing["quantity"])
     )
     existing = D(old["qty"]) if old else D(0)
-    risk_used = sum(
-        max(D(0), (D(p["entry"]) - D(p["stop"])) * (1 if p["side"] == "long" else -1)) * D(p["qty"])
-        for p in book["positions"].values()
-    )
+    risk_used = sum(max(D(0), -position_pnl(p, p["stop"])) for p in book["positions"].values())
     risk_budget = max(
         D(0),
         equity
@@ -194,16 +208,18 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
         * D(parameters["portfolio_risk_multiple"] if active(parameters, "portfolio_risk_multiple") else 3)
         - risk_used,
     )
-    risk_amount = min(equity * D(rule["risk"]) * tier["risk_factor"], risk_budget) / (
-        distance / price + 2 * FEE + 2 * SLIP
+    stop_unit_loss = -position_pnl(entry_position(1, price, side, coin), stop)
+    risk_fraction = stop_unit_loss / unit + (
+        (FEE + SLIP) * (1 + price / stop) if coin else 2 * FEE + 2 * SLIP
     )
+    risk_amount = min(equity * D(rule["risk"]) * tier["risk_factor"], risk_budget) / risk_fraction
     correlated = sum(
-        D(p["qty"]) * D(quotes.get(k, {}).get("mid", p["entry"]))
+        native_notional(p, quotes.get(k, {}).get("mid", p["entry"]))
         for k, p in book["positions"].items()
         if instruments.get(k, {}).get("group") == item["group"]
     )
     headroom = min(
-        (cap - existing) * price if cap is not None else equity * D(rule["exposure"]),
+        (cap - existing) * unit if cap is not None else equity * D(rule["exposure"]),
         equity * D(rule["exposure"]) * tier["risk_factor"] - D(snap["exposure"]),
         (
             equity * D(rule["exposure"]) * tier["risk_factor"] * D(parameters["group_exposure_fraction"])
@@ -215,7 +231,7 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
         risk_amount,
     )
     # Reserve room for planned additions when the user sets a total maximum.
-    target = headroom if system else D(sizing["quantity"]) * price
+    target = headroom if system else D(sizing["quantity"]) * unit
     if sizing["mode"] in ("maximum", "system") and ratios:
         target /= 1 + sum(map(D, ratios))
     if adding:
@@ -232,7 +248,7 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
             raise ValueError("未满足加仓条件")
         if not old.get("initial_qty"):
             raise ValueError("旧仓位缺少初始币数量，不允许自动加仓")
-        target = D(old["initial_qty"]) * D(ratios[old["adds"]]) * price
+        target = D(old["initial_qty"]) * D(ratios[old["adds"]]) * unit
         if parameters["profitable_add_only"] and price * (1 if side == "long" else -1) <= D(old["entry"]) * (
             1 if side == "long" else -1
         ):
@@ -242,24 +258,43 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
     amount = min(target, headroom)
     if sizing["mode"] == "fixed" and amount < target:
         raise ValueError("固定仓位超过可用资金或风险额度")
-    if amount < 5:
+    if amount * (price if coin else 1) < 5:
         raise ValueError("可用仓位额度不足")
     qty = (
-        amount / price
+        amount / unit
         if sizing["mode"] == "fixed"
-        else (amount / price).quantize(D(".00000001"), rounding="ROUND_DOWN")
+        else (amount / unit).quantize(D(".00000001"), rounding="ROUND_DOWN")
     )
+
+    requested_qty = qty
+    contract_size = D(q.get("contract_size") or 0)
+    step = D(q.get("contract_step") or 0)
+    min_contracts = D(q.get("min_contracts") or 1)
+
+    def rounded(quantity):
+        if not coin:
+            return quantity
+        if q.get("inverse") is not True or q.get("settle") != settle or contract_size <= 0 or step <= 0:
+            raise ValueError("币本位合约面值或数量精度未核验，暂停新增风险")
+        contracts = (quantity * price / contract_size / step).to_integral_value(rounding="ROUND_DOWN") * step
+        if contracts < min_contracts:
+            raise ValueError("币数量不足一档最小合约张数")
+        return contracts * contract_size / price
+
+    qty = rounded(qty)
 
     def projected_risk(quantity):
         projected = copy.deepcopy(book)
         projected.pop("source", None)
-        projected["cash"] = str(D(book["cash"]) - quantity * price * FEE)
+        projected["cash"] = str(D(book["cash"]) - quantity * unit * FEE)
         total = quantity + existing
         position = {
             "side": side,
+            "inverse": coin,
+            "settle": settle,
             "qty": str(total),
             "entry": str((price * quantity + (D(old["entry"]) * existing if old else 0)) / total),
-            "margin": str(quantity * price / leverage + (D(old["margin"]) if old else 0)),
+            "margin": str(quantity * unit / leverage + (D(old["margin"]) if old else 0)),
             "margin_mode": margin_mode,
         }
         projected["positions"][key] = position
@@ -282,14 +317,21 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
                     low = mid
                 else:
                     high = mid
-            qty = low.quantize(D(".00000001"), rounding="ROUND_DOWN")
+            qty = rounded(low.quantize(D(".00000001"), rounding="ROUND_DOWN"))
             if qty * price < 5:
                 raise ValueError("强平风险约束下没有足够的可开仓数量")
             liquidation, gap = projected_risk(qty)
         if gap is not None and gap < D(".03"):
             raise ValueError("止损距离预估强平线过近")
     return {
-        "notional": qty * price,
+        "notional": qty * unit,
+        "quote_notional": qty * price,
+        "inverse": coin,
+        "settle": settle,
+        "requested_qty": requested_qty,
+        "contracts": qty * price / contract_size if coin else None,
+        "contract_size": contract_size if coin else None,
+        "contract_step": step if coin else None,
         "qty": qty,
         "price": price,
         "stop": stop,
@@ -299,19 +341,21 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
         "risk": {
             "account_equity": str(equity),
             "available_before": str(free),
-            "initial_margin": str(qty * price / leverage),
-            "estimated_entry_fee": str(qty * price * FEE),
-            "available_after": str(free - qty * price / leverage - qty * price * FEE),
-            "estimated_loss_at_stop": str(qty * (distance + price * (2 * FEE + 2 * SLIP))),
+            "initial_margin": str(qty * unit / leverage),
+            "estimated_entry_fee": str(qty * unit * FEE),
+            "available_after": str(free - qty * unit / leverage - qty * unit * FEE),
+            "estimated_loss_at_stop": str(qty * unit * risk_fraction),
             "existing_exposure": str(snap["exposure"]),
             "correlated_exposure": str(correlated),
             "maintenance_rate_estimate": str(MAINTENANCE_RATE),
             "close_fee_rate_estimate": str(CLOSE_FEE_RATE),
-            "maintenance_margin_estimate": str((qty + existing) * price * MAINTENANCE_RATE),
+            "maintenance_margin_estimate": str((qty + existing) * unit * MAINTENANCE_RATE),
             "stop_to_liquidation_pct": float(gap * 100) if gap is not None else None,
             "minimum_stop_to_liquidation_pct": 3,
             "liquidation_status": "estimated" if liquidation is not None else "no_positive_price",
-            "model": "USDT linear approximation; other position prices held constant; not exchange risk-tier certification",
+            "settlement_currency": settle,
+            "model": ("inverse coin" if coin else "USDT linear")
+            + " approximation; other position prices held constant; not exchange risk-tier certification",
             "sizing_mode": sizing["mode"],
             "system_level": sizing.get("system_level") if system else None,
             "available_margin_budget_fraction": float(tier["margin_fraction"]),
@@ -393,7 +437,7 @@ class PaperBroker:
                 self.action_review.check_size(opportunity, sizing)
             before_snapshot = valuation(book, quotes, now)
             qty, price = sizing["qty"], sizing["price"]
-            fee = qty * price * FEE
+            fee = sizing["notional"] * FEE
             book["cash"] = str(D(book["cash"]) - fee)
             book["fees"] = str(D(book["fees"]) + fee)
             if old:
@@ -403,8 +447,12 @@ class PaperBroker:
                 if "target_basis_qty" in old:
                     old["target_basis_qty"] = str(D(old["target_basis_qty"]) + qty)
                 old["original_qty"] = str(D(old["original_qty"]) + qty)
-                old["margin"] = str(D(old["margin"]) + qty * price / sizing["leverage"])
+                old["margin"] = str(D(old["margin"]) + sizing["notional"] / sizing["leverage"])
                 old["adds"] += 1
+                old["logic_reporting_net"] = str(
+                    D(old.get("logic_reporting_net", old.get("logic_net", 0)))
+                    - fee * (price if inverse(old) else 1)
+                )
                 old["logic_net"] = str(D(old.get("logic_net", 0)) - fee)
                 old["liquidation"] = sizing["liquidation"]
             else:
@@ -414,17 +462,22 @@ class PaperBroker:
                     "logic_trade_id": identity,
                     "logic_symbol": opportunity["symbol"],
                     "logic_net": str(-fee),
+                    "logic_reporting_net": str(-fee * (price if sizing["inverse"] else 1)),
                     "logic_demo": opportunity.get("demo", True),
                     "logic_policy": json.dumps(
                         {"profile": prefs["profile"], "min_score": prefs["min_score"]}, sort_keys=True
                     ),
+                    "inverse": sizing["inverse"],
+                    "settle": sizing["settle"],
+                    "contract_size": str(sizing["contract_size"]) if sizing["inverse"] else None,
+                    "contract_step": str(sizing["contract_step"]) if sizing["inverse"] else None,
                     "side": opportunity["direction"],
                     "qty": str(qty),
                     "original_qty": str(qty),
                     "entry": str(price),
                     "stop": str(sizing["stop"]),
                     "targets": opportunity["plan"]["targets"],
-                    "margin": str(qty * price / sizing["leverage"]),
+                    "margin": str(sizing["notional"] / sizing["leverage"]),
                     "leverage": sizing["leverage"],
                     "margin_mode": sizing["margin_mode"],
                     "liquidation": sizing["liquidation"],
@@ -461,6 +514,8 @@ class PaperBroker:
                 "price": str(price),
                 "fee": str(fee),
                 "margin_mode": sizing["margin_mode"],
+                "settle": sizing["settle"],
+                "contracts": str(sizing["contracts"]) if sizing["inverse"] else None,
             }
             self.record(db, identity, aid, "add" if adding else "open", detail)
             return {"status": "filled", **detail}
@@ -486,15 +541,25 @@ class PaperBroker:
                 D(p.get("target_basis_qty", p["original_qty"]) if target is not None else p["qty"])
                 * D(ratio),
             )
+            if inverse(p) and qty < D(p["qty"]):
+                cs, step = D(p["contract_size"]), D(p.get("contract_step") or 1)
+                contracts = (qty * D(p["entry"]) / cs / step).to_integral_value(
+                    rounding="ROUND_CEILING"
+                ) * step
+                qty = min(D(p["qty"]), contracts * cs / D(p["entry"]))
             sign = 1 if p["side"] == "long" else -1
             price = D(quote["bid"] if sign == 1 else quote["ask"]) * (1 - SLIP if sign == 1 else 1 + SLIP)
-            fee = qty * price * FEE
-            pnl = (price - D(p["entry"])) * qty * sign
+            fee = native_notional(p, price) * qty / D(p["qty"]) * FEE
+            pnl = position_pnl(p, price, qty)
             # Isolated paper collateral is ring-fenced, including a price gap beyond bankruptcy.
             allocated = D(p["margin"]) * qty / D(p["qty"])
             adjustment = max(D(0), -allocated - (pnl - fee)) if mode(p) == "isolated" else D(0)
             pnl += adjustment
             book["cash"] = str(D(book["cash"]) + pnl - fee)
+            book["realized_reporting"] = str(
+                D(book.get("realized_reporting", book["realized"]))
+                + (pnl - fee) * (price if inverse(p) else 1)
+            )
             book["realized"] = str(D(book["realized"]) + pnl - fee)
             book["fees"] = str(D(book["fees"]) + fee)
             before = D(p["qty"])
@@ -508,6 +573,10 @@ class PaperBroker:
                     )
             if reason == "risk_reduce":
                 p["risk_reduced"] = True
+            p["logic_reporting_net"] = str(
+                D(p.get("logic_reporting_net", p.get("logic_net", 0)))
+                + (pnl - fee) * (price if inverse(p) else 1)
+            )
             p["logic_net"] = str(D(p.get("logic_net", 0)) + pnl - fee)
             if D(p["qty"]) <= D(".000000001"):
                 if p.get("logic_version") and p.get("logic_trade_id"):
@@ -517,7 +586,7 @@ class PaperBroker:
                             p["logic_trade_id"],
                             p.get("entry_logic_version", p["logic_version"]),
                             time.time(),
-                            float(p["logic_net"]),
+                            float(p.get("logic_reporting_net", p["logic_net"])),
                             int(p.get("logic_demo", True)),
                             p.get("logic_policy", "{}"),
                         ),
@@ -533,7 +602,7 @@ class PaperBroker:
                         "quantity": float(p["original_qty"]),
                         "additions": p["adds"],
                         "exit_reason": reason,
-                        "net_pnl": float(p["logic_net"]),
+                        "net_pnl": float(p.get("logic_reporting_net", p["logic_net"])),
                         "partial_targets": len(p["tp_done"]),
                         "entry_logic_version": p.get("entry_logic_version", p["logic_version"]),
                         "final_logic_version": p["logic_version"],
@@ -554,6 +623,7 @@ class PaperBroker:
                 "qty": str(qty),
                 "price": str(price),
                 "pnl": str(pnl - fee),
+                "settle": book.get("settle", "USDT"),
                 "reason": reason,
                 "margin_mode": mode(p),
                 "isolated_loss_cap_adjustment": str(adjustment),
@@ -561,6 +631,8 @@ class PaperBroker:
                 "quote": quote,
                 "planned_stop": p["stop"],
                 "trade_net_pnl": p.get("logic_net"),
+                "trade_reporting_net_pnl": p.get("logic_reporting_net", p.get("logic_net")),
+                "reporting_currency": "USD reference (USDT at par)",
                 "entry_logic_version": p.get("entry_logic_version", p.get("logic_version")),
             }
             journal.close(db, aid, key, p, detail, D(p["qty"]) <= D(".000000001"))
@@ -707,12 +779,16 @@ class PaperBroker:
                     books = self.store.read(db, "v2_ledgers")
                     current = books[aid]["positions"].get(key)
                     if current and current["funding_at"] < boundary:
-                        fee = D(current["qty"]) * price * D(q["funding_rate"]) * sign
+                        fee = native_notional(current, price) * D(q["funding_rate"]) * sign
                         if mode(current) == "isolated":
                             fee = min(fee, D(current["margin"]))
                             current["margin"] = str(D(current["margin"]) - fee)
                         books[aid]["cash"] = str(D(books[aid]["cash"]) - fee)
                         current["funding_at"] = boundary
+                        current["logic_reporting_net"] = str(
+                            D(current.get("logic_reporting_net", current.get("logic_net", 0)))
+                            - fee * (price if inverse(current) else 1)
+                        )
                         current["logic_net"] = str(D(current.get("logic_net", 0)) - fee)
                         journal.event(
                             db,

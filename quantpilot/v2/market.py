@@ -6,6 +6,7 @@ import time
 
 import ccxt
 
+from .contracts import client_name, client_options, settlement, validate_market
 from .models import EXCHANGES, FRAMES
 
 
@@ -16,48 +17,77 @@ class FuturesMarket:
         self.clients = {}
         self.locks = {name: threading.RLock() for name in EXCHANGES}
         self.cache = {}
+        self.streams = None
+        self.catalog_checked = {}
 
-    def client(self, exchange):
+    def client(self, exchange, settle="USDT"):
         if exchange not in EXCHANGES:
             raise ValueError("不支持的交易所")
-        if exchange not in self.clients:
-            self.clients[exchange] = self.factory(
-                "binanceusdm" if exchange == "binance" else exchange,
+        key = (exchange, settle == "USDT")
+        if key not in self.clients:
+            self.clients[key] = self.factory(
+                client_name(exchange, settle),
                 {
                     "enableRateLimit": True,
                     "timeout": 8000,
-                    "options": {"defaultType": "swap", "defaultSubType": "linear"},
+                    "options": client_options(settle),
                 },
             )
-        return self.clients[exchange]
+        return self.clients[key]
 
     def instrument(self, client, symbol):
         client.load_markets()
         market = client.market(symbol)
-        if (
-            not market.get("swap")
-            or not market.get("linear")
-            or market.get("settle") != "USDT"
-            or market.get("active") is False
-        ):
-            raise ValueError("仅支持已上市的 USDT 线性永续合约")
-        return market
+        return validate_market(market)
 
-    def markets(self, exchange, query=""):
+    def markets(self, exchange, query="", kind="linear", settle="", offset=0, limit=50):
         with self.locks[exchange]:
-            client = self.client(exchange)
-            markets = client.load_markets()
-            return [
-                {"symbol": m["symbol"], "base": m["base"], "contract_size": m.get("contractSize")}
-                for m in markets.values()
-                if m.get("swap")
-                and m.get("linear")
-                and m.get("settle") == "USDT"
-                and m.get("active") is not False
-                and query.upper() in m["symbol"]
-            ][:150]
+            client = self.client(exchange, "USDT" if kind == "linear" else (settle or "BTC"))
+            catalog_key = (exchange, kind)
+            checked = self.catalog_checked.get(catalog_key)
+            markets = (
+                client.load_markets(reload=True)
+                if checked and time.time() - checked > 600
+                else client.load_markets()
+            )
+            self.catalog_checked[catalog_key] = time.time()
+            found = []
+            for m in markets.values():
+                try:
+                    validate_market(m)
+                except ValueError:
+                    continue
+                if bool(m.get("inverse")) != (kind == "inverse") or (settle and m["settle"] != settle):
+                    continue
+                if query.upper().replace(" ", "") not in m["symbol"]:
+                    continue
+                found.append(
+                    {
+                        "symbol": m["symbol"],
+                        "base": m["base"],
+                        "settle": m["settle"],
+                        "inverse": bool(m.get("inverse")),
+                        "contract_size": m["contractSize"],
+                        "min_contracts": m.get("limits", {}).get("amount", {}).get("min"),
+                        "amount_step": m.get("precision", {}).get("amount"),
+                    }
+                )
+            found.sort(key=lambda m: m["symbol"])
+            return {
+                "items": found[offset : offset + limit],
+                "total": len(found),
+                "offset": offset,
+                "limit": limit,
+                "exchange": exchange,
+                "kind": kind,
+            }
 
     def quote(self, item):
+        if self.streams and not self.demo:
+            streamed = self.streams.quote(item)
+            if streamed:
+                cached = self.cache.get((item["exchange"], item["symbol"], "derivatives"))
+                return {**(cached[1] if cached else {}), **streamed}
         now = time.time()
         if self.demo:
             p = {"BTC": 68000, "ETH": 2600, "SOL": 160, "AVGO": 180, "SOXL": 40}.get(item["label"], 100)
@@ -75,37 +105,22 @@ class FuturesMarket:
             }
         name, symbol = item["exchange"], item["symbol"]
         with self.locks[name]:
-            client = self.client(name)
+            client = self.client(name, settlement(symbol))
             m = self.instrument(client, symbol)
             if name == "binance":
-                book = client.fapiPublicGetTickerBookTicker({"symbol": m["id"]})
+                book = (
+                    client.dapiPublicGetTickerBookTicker
+                    if m.get("inverse")
+                    else client.fapiPublicGetTickerBookTicker
+                )({"symbol": m["id"]})
+                if isinstance(book, list):
+                    book = book[0]
                 bid, ask, stamp = float(book["bidPrice"]), float(book["askPrice"]), float(book["time"]) / 1000
             else:
                 book = client.fetch_order_book(symbol, 5 if name == "okx" else 20)
                 bid, ask = float(book["bids"][0][0]), float(book["asks"][0][0])
                 stamp = (book.get("timestamp") or 0) / 1000
-            key = (name, symbol, "derivatives")
-            cached = self.cache.get(key)
-            if not cached or now - cached[0] > 60:
-                funding, oi, mark = None, None, None
-                try:
-                    f = client.fetch_funding_rate(symbol)
-                    funding, mark = f.get("fundingRate"), f.get("markPrice")
-                except Exception:
-                    funding, mark = None, None
-                try:
-                    o = (
-                        client.fetch_open_interest_history(symbol, "5m", limit=2)[-1]
-                        if name == "gate"
-                        else client.fetch_open_interest(symbol)
-                    )
-                    if name == "gate" and not 0 <= time.time() - (o.get("timestamp") or 0) / 1000 <= 600:
-                        raise ValueError("持仓量数据过期")
-                    oi = o.get("openInterestAmount")
-                except Exception:
-                    oi = None
-                cached = (now, {"funding_rate": funding, "open_interest": oi, "mark": mark})
-                self.cache[key] = cached
+            cached = (now, self.derivatives(item))
         if not all(math.isfinite(v) and v > 0 for v in (bid, ask)) or ask < bid:
             raise ValueError("交易所报价无效")
         return {
@@ -115,6 +130,15 @@ class FuturesMarket:
             "timestamp": stamp,
             "received_at": time.time(),
             "source": "exchange",
+            "inverse": bool(m.get("inverse")),
+            "settle": m["settle"],
+            "contract_size": m["contractSize"],
+            "contract_step": (
+                10 ** -int(m["precision"]["amount"])
+                if client.precisionMode == 2
+                else m["precision"]["amount"]
+            ),
+            "min_contracts": m.get("limits", {}).get("amount", {}).get("min"),
             **cached[1],
         }
 
@@ -124,8 +148,11 @@ class FuturesMarket:
         now, span = time.time(), FRAMES[frame]
         key = (item["exchange"], item["symbol"], frame, closed)
         cached = self.cache.get(key)
-        if cached and now - cached[0] < (30 if closed else 4):
-            return cached[1]
+        streamed = self.streams and not self.demo and self.streams.quote(item)
+        if cached and now - cached[0] < (300 if streamed else 30 if closed else 4):
+            rows = self.streams.merge_candles(item, frame, cached[1]) if streamed else cached[1]
+            if all(rows[i][0] - rows[i - 1][0] == span * 1000 for i in range(1, len(rows))):
+                return [r for r in rows if not closed or r[0] / 1000 + span <= now - 2]
         if self.demo:
             base = self.quote(item)["mid"]
             end = int(now) // span * span
@@ -144,9 +171,11 @@ class FuturesMarket:
                 )
         else:
             with self.locks[item["exchange"]]:
-                client = self.client(item["exchange"])
+                client = self.client(item["exchange"], settlement(item["symbol"]))
                 self.instrument(client, item["symbol"])
                 rows = client.fetch_ohlcv(item["symbol"], frame, limit=420)
+        if self.streams and not self.demo:
+            rows = self.streams.merge_candles(item, frame, rows)
         valid = []
         for row in rows:
             values = [float(v) for v in row[:6]]
@@ -169,3 +198,36 @@ class FuturesMarket:
             raise ValueError("K 线已过期")
         self.cache[key] = (now, valid)
         return valid
+
+    def derivatives(self, item):
+        if self.demo:
+            return {}
+        name, symbol = item["exchange"], item["symbol"]
+        now = time.time()
+        key = (name, symbol, "derivatives")
+        cached = self.cache.get(key)
+        if cached and now - cached[0] < 60:
+            return cached[1]
+        with self.locks[name]:
+            client = self.client(name, settlement(symbol))
+            self.instrument(client, symbol)
+            funding, oi, mark = None, None, None
+            try:
+                f = client.fetch_funding_rate(symbol)
+                funding, mark = f.get("fundingRate"), f.get("markPrice")
+            except Exception:
+                funding, mark = None, None
+            try:
+                o = (
+                    client.fetch_open_interest_history(symbol, "5m", limit=2)[-1]
+                    if name == "gate"
+                    else client.fetch_open_interest(symbol)
+                )
+                if name == "gate" and not 0 <= time.time() - (o.get("timestamp") or 0) / 1000 <= 600:
+                    raise ValueError("持仓量数据过期")
+                oi = o.get("openInterestAmount")
+            except Exception:
+                oi = None
+            result = {"funding_rate": funding, "open_interest": oi, "mark": mark, "context_at": now}
+            self.cache[key] = (now, result)
+            return result
