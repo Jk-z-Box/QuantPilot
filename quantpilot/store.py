@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -15,16 +16,23 @@ class Store:
         self.directory = directory
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path = directory / "quantpilot.db"
+        # Exclusive checkout: concurrent / nested transactions never share a connection.
+        # Keep a small bounded idle pool instead of reopening SQLite on every price tick.
+        self._connections = queue.LifoQueue(maxsize=8)
         # Create privately before SQLite can create journals or WAL sidecars.
-        fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
-        os.close(fd)
+        # Do not open/close an existing DB outside SQLite: POSIX close() can
+        # release this process's SQLite locks when another Store is still open.
+        try:
+            fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            os.close(fd)
         os.chmod(self.path, 0o600)
         with self.connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-                CREATE TABLE IF NOT EXISTS orders (
-                    id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, result TEXT NOT NULL, created REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS audit (
                     id INTEGER PRIMARY KEY, created REAL NOT NULL, event TEXT NOT NULL, detail TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS sessions (
@@ -33,30 +41,36 @@ class Store:
                 CREATE INDEX IF NOT EXISTS attempts_created ON attempts(created);
                 CREATE TABLE IF NOT EXISTS credentials (name TEXT PRIMARY KEY, encrypted BLOB NOT NULL);
             """)
-            db.execute("INSERT OR IGNORE INTO kv VALUES (?,?)", ("account", json.dumps({
-                "cash": initial_cash, "positions": {}, "realized_pnl": "0", "fees": "0",
-                "day": "", "day_equity": initial_cash,
-            })))
             db.execute("INSERT OR IGNORE INTO kv VALUES ('kill', 'false')")
-            db.execute("INSERT OR IGNORE INTO kv VALUES ('strategy', ?)", (json.dumps({
-                "enabled": False, "exchange": "okx", "symbol": "BTC/USDT", "timeframe": "1h",
-                "budget": "100", "stop_pct": "0.02", "take_pct": "0.04",
-            }),))
             db.execute("INSERT OR IGNORE INTO kv VALUES ('schema_version', '1')")
 
     @contextmanager
     def connect(self):
-        db = sqlite3.connect(self.path, timeout=10)
-        db.row_factory = sqlite3.Row
-        db.execute("PRAGMA busy_timeout=10000")
+        try:
+            db = self._connections.get_nowait()
+        except queue.Empty:
+            db = sqlite3.connect(self.path, timeout=10, check_same_thread=False)
+            db.row_factory = sqlite3.Row
+            db.execute("PRAGMA busy_timeout=10000")
+            db.execute("PRAGMA cache_size=-512")
+        reusable = True
         try:
             yield db
             db.commit()
         except BaseException:
-            db.rollback()
+            try:
+                db.rollback()
+            except sqlite3.Error:
+                reusable = False
             raise
         finally:
-            db.close()
+            if reusable:
+                try:
+                    self._connections.put_nowait(db)
+                except queue.Full:
+                    db.close()
+            else:
+                db.close()
 
     @contextmanager
     def transaction(self):
@@ -76,18 +90,34 @@ class Store:
         with self.connect() as db:
             return self.read(db, key)
 
+    def get_many(self, keys):
+        """One fresh statement/snapshot; values are never served from a TTL cache."""
+        keys = tuple(dict.fromkeys(keys))
+        if not keys:
+            return {}
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT key,value FROM kv WHERE key IN (SELECT value FROM json_each(?))",
+                (json.dumps(keys),),
+            ).fetchall()
+        values = {row["key"]: json.loads(row["value"]) for row in rows}
+        if set(values) != set(keys):
+            raise KeyError("Missing stored configuration")
+        return values
+
     @staticmethod
     def audit(db, event: str, detail: dict):
         # Call sites pass explicit allowlisted fields, never request bodies or exception messages.
-        db.execute("INSERT INTO audit(created,event,detail) VALUES (?,?,?)",
-                   (time.time(), event, json.dumps(detail)))
+        db.execute(
+            "INSERT INTO audit(created,event,detail) VALUES (?,?,?)", (time.time(), event, json.dumps(detail))
+        )
 
     def record(self, event, detail):
         with self.transaction() as db:
             self.audit(db, event, detail)
 
     def recent(self, table: str, limit=100):
-        if table not in ("audit", "orders"):
+        if table != "audit":
             raise ValueError("Unknown table")
         with self.connect() as db:
             rows = db.execute(f"SELECT * FROM {table} ORDER BY created DESC LIMIT ?", (limit,)).fetchall()  # noqa: S608
@@ -96,10 +126,16 @@ class Store:
     def set_kill(self, enabled: bool):
         with self.transaction() as db:
             self.write(db, "kill", enabled)
-            if enabled:
-                config = self.read(db, "strategy")
-                config["enabled"] = False
-                self.write(db, "strategy", config)
+            row = db.execute("SELECT value FROM kv WHERE key='v2_preferences'").fetchone()
+            if row:
+                prefs = json.loads(row[0])
+                prefs["halted"] = enabled
+                self.write(db, "v2_preferences", prefs)
+                if enabled:
+                    accounts = self.read(db, "v2_accounts")
+                    for account in accounts.values():
+                        account["auto"] = False
+                    self.write(db, "v2_accounts", accounts)
             self.audit(db, "kill_switch", {"enabled": enabled})
 
 

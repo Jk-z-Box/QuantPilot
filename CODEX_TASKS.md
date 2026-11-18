@@ -1,33 +1,13 @@
-# QuantPilot 交接任务
+# Maintainer handoff / 維護交接
 
-## 已实现
+Current source: 0.14.0 on main. Read README, docs/V0140.md and docs/ARCHITECTURE.md first.
 
-- [x] 独立重建 Python/FastAPI/SQLite 项目与中文 Web 控制台。
-- [x] 5 个交易所适配、公共盘口与 K 线、只读账户接口。
-- [x] EMA/RSI/ATR/量比信号、有效期、自动模拟执行与策略停用恢复保护。
-- [x] 模拟账户账本、限价 IOC、费用滑点、持久化幂等、并发风控、止盈止损。
-- [x] 密码/会话/CSRF/限速/凭据加密/审计/单进程保护。
-- [x] 可选 OpenAI Responses 风险建议与 Web 配置，禁止 AI 触发订单。
-- [x] Linux 安装更新脚本、自定义端口账号密码、systemd、CLI 快捷菜单、备份。
-- [x] Cloudflare HTTPS 回源说明和单条 Origin Rule JSON 生成。
-- [x] 自动测试、依赖哈希、安全扫描、GitHub Actions 待启用模板。
+- Preserve live execution gates and credential-bound certification; never equate mocks with exchange acceptance.
+- Preserve v2 accounts, positions, history generations, strategy archives, vault and server-side Codex login during upgrades.
+- Do not raw-open/close an existing SQLite database file: POSIX descriptor closure can release process locks. Use Store's exclusive connection checkout and SQLite APIs.
+- Keep trading and display ordering separate. Account edits must include the expected revision.
+- New loss-addition and trailing controls are per pair and disabled by default; test linear/inverse and long/short paths when changing execution.
+- Run pytest, Ruff, JS syntax checks, responsive browser checks and read-only production health checks appropriate to the change.
+- Keep secrets and backups outside Git. Publish reviewed source to main; deploy a full commit, never a moving ref.
 
-## 需要外部输入或环境
-
-- [ ] 导入用户提供的原始 starter ZIP，审查原始 README/CODEX_TASKS，比较后合并。本次 `/mnt/data` 不可访问，不得声称已经导入。
-- [x] 创建 GitHub 仓库并按用户要求设为公开： `Jk-z-Box/QuantPilot`。此次上传使用用户再次明确授权的临时内存凭据，不在本项目保存；后续应换用安全连接或 OAuth/SSH。
-- [x] 上传项目，逐文件比对远程 Git blob，并交付固定提交的公开安装命令。
-- [ ] 在有 workflow 权限的授权下启用 `ci/github-actions.yml`：移动至 `.github/workflows/ci.yml` 后检查 CI。当前 Token 没有 workflow 权限，故只上传模板。
-- [ ] 在用户 Linux 主机或独立测试虚拟机实际验收首次安装、更新、回滚、重启及备份恢复。
-- [ ] 获得实际域名/服务器信息后配置 Cloudflare DNS、Origin Rules、证书、防火墙，并从最终域名验收。
-- [ ] 用用户自行保存的只读密钥做各交易所账户查询验收。自动测试只使用替身，不证明账户权限正确。
-- [ ] 用户选定 OpenAI 模型并保存 Key 后进行一次明确授权的 API 验收。本次未调用付费模型。
-
-## 后续功能
-
-- [ ] 历史回测、走样本外验证和更真实的深度/部分成交模拟。
-- [ ] 外部不可篡改审计、监控、备份保留策略、MFA/RBAC。
-- [ ] 可选择多个独立模拟策略，明确组合风险与资金分配。
-- [ ] 只在完成 `docs/SECURITY.md` 的独立认证后考虑实盘组件。
-
-继续开发时先阅读测试报告，不要把“已实现接口”“替身测试通过”“真实服务验收通过”混为同一状态。不要在日志或提交中保存账号密码、API Key、Token、真实余额或用户个人数据。
+仍需逐交易所測試網與實盤驗收；尚未提供完整歷史回測、交易所精確保證金／撮合模型、多使用者權限或高可用叢集。公開證據缺失時保留缺失，不以 AI 編造數值。
