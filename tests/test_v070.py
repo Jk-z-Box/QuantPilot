@@ -186,7 +186,7 @@ def test_ai_timeout_blocks_entry_and_allows_protection(workspace, account, oppor
     gate = workspace.action_review
     # Isolate async deadline behavior from sizing eligibility (tested separately).
     monkeypatch.setattr("quantpilot.v2.action_review.account_context", lambda *a: {})
-    for action in ("open", "add", "stop_loss", "take_profit", "liquidation_distance"):
+    for action in ("open", "add", "stop_loss", "take_profit", "liquidation_distance", "trailing_take_profit"):
         gate.last_requests.clear()  # Each case independently tests timeout, not the shared cadence.
         assert gate.inspect(account["id"], "btc", action, quote, opportunity)["state"] == "pending"
         for job in gate.jobs.values():

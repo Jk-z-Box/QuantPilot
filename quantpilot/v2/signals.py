@@ -263,6 +263,39 @@ def evaluate(item, frames, quote, evidence, profile, now, min_score=80, paramete
         adverse = any(e.get("bias") == ("bearish" if sign == 1 else "bullish") for e in sources)
         # Neutral observations demonstrate coverage, not directional proof.
         points(name, 0 if risk or adverse else weight if favorable else weight / 2, weight)
+    if parameters["sentiment_enabled"] and item.get("group") == "crypto":
+        sources = [
+            e
+            for e in evidence
+            if e.get("category") == "sentiment"
+            and e.get("status") == "fresh"
+            and e.get("published_at", now + 1) <= now
+            and e.get("expires_at", 0) > now
+        ]
+        weight = parameters["weight_sentiment"]
+        if not sources:
+            points("BTC 市场情绪参考", 0, weight, False)
+            if parameters["sentiment_require_fresh"]:
+                blockers.append("恐惧与贪婪指数缺失或过期")
+        else:
+            source = max(sources, key=lambda e: e["published_at"])
+            value = source["value"]
+            bias = (
+                1
+                if active(parameters, "sentiment_low") and value <= parameters["sentiment_low"]
+                else -1
+                if active(parameters, "sentiment_high") and value >= parameters["sentiment_high"]
+                else 0
+            )
+            if not parameters["sentiment_contrarian"]:
+                bias *= -1
+            favorable = sign * bias
+            points(
+                "BTC 市场情绪参考", weight if favorable > 0 else 0 if favorable < 0 else weight / 2, weight
+            )
+            base["expires_at"] = min(base["expires_at"], source["expires_at"])
+            if favorable < 0 and parameters["sentiment_block_adverse"]:
+                blockers.append("极端情绪与当前开仓方向相反")
     total = sum(b["max"] for b in breakdown)
     if total <= 0:
         blockers.append("至少需要一项有效评分权重")

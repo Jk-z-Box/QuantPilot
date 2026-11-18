@@ -8,6 +8,7 @@ const notificationCategories = {
   opportunity: "有效机会",
   ai: "AI 介入干预",
 };
+const noticeBuffers = {};
 let notificationDirty = false,
   notificationCursor = null,
   notificationBusy = false,
@@ -53,6 +54,20 @@ function playNotice(settings = state?.notifications?.settings || {}) {
   const volume =
     Math.min(100, Math.max(0, Number(settings.sound_volume ?? 75))) / 100;
   if (!volume) return;
+  if (noticeBuffers[settings.sound_tone]) {
+    const source = soundContext.createBufferSource(),
+      gain = soundContext.createGain();
+    source.buffer = noticeBuffers[settings.sound_tone];
+    gain.gain.value = volume;
+    source.connect(gain);
+    gain.connect(soundContext.destination);
+    source.start();
+    source.onended = () => {
+      source.disconnect();
+      gain.disconnect();
+    };
+    return;
+  }
   const tones = {
     chime: [784, 988, 1175],
     bell: [1047, 784, 1047],
@@ -92,6 +107,17 @@ $("soundTest").onclick = () =>
     if (!Audio) throw Error("此浏览器不支持网页声音");
     soundContext ||= new Audio();
     await soundContext.resume();
+    for (const [tone, path] of Object.entries({
+      warm: "warm-chime.wav",
+      custom_y1462: "custom-y1462.wav",
+    })) {
+      if (noticeBuffers[tone]) continue;
+      const response = await fetch("/static/" + path);
+      if (!response.ok) throw Error("提示音加载失败，请重试");
+      noticeBuffers[tone] = await soundContext.decodeAudioData(
+        await response.arrayBuffer(),
+      );
+    }
     playNotice({
       sound_tone: $("notificationForm").sound_tone.value,
       sound_volume: Number($("notificationForm").sound_volume.value),

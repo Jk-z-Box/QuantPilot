@@ -48,7 +48,14 @@ class Settings(BaseModel):
     def validate_settings(self):
         from decimal import Decimal, InvalidOperation
 
-        for field in ("initial_cash", "max_order", "max_exposure", "max_position", "daily_loss_limit", "max_trade_loss"):
+        for field in (
+            "initial_cash",
+            "max_order",
+            "max_exposure",
+            "max_position",
+            "daily_loss_limit",
+            "max_trade_loss",
+        ):
             try:
                 value = Decimal(getattr(self, field))
                 if not value.is_finite() or value <= 0 or value > Decimal("1000000000"):
@@ -60,7 +67,14 @@ class Settings(BaseModel):
         if not all(re.fullmatch(r"[A-Z0-9]{2,12}/USDT", s) for s in self.symbols):
             raise ValueError("Only allowlisted USDT spot symbols are supported")
         origin = urlsplit(self.public_origin)
-        if origin.username or origin.password or origin.path or origin.query or origin.fragment or not origin.hostname:
+        if (
+            origin.username
+            or origin.password
+            or origin.path
+            or origin.query
+            or origin.fragment
+            or not origin.hostname
+        ):
             raise ValueError("Use a bare origin without path or credentials")
         if origin.scheme != "https" and not (
             origin.scheme == "http" and origin.hostname in ("127.0.0.1", "localhost", "::1")
@@ -94,7 +108,9 @@ def atomic_json(path: Path, payload: dict):
         tmp.unlink(missing_ok=True)
 
 
-def update_settings(path: Path, changes: dict, fallback: Settings | None = None, expected_password_hash: str | None = None):
+def update_settings(
+    path: Path, changes: dict, fallback: Settings | None = None, expected_password_hash: str | None = None
+):
     """Serialize read/modify/write with CLI password rotations and Web settings."""
     fd = os.open(path.with_suffix(".lock"), os.O_RDWR | os.O_CREAT, 0o600)
     with os.fdopen(fd, "a+") as lock:

@@ -6,6 +6,9 @@ from .models import Model
 
 # default, lower, upper, group, label. Disabled parameters never fall back to defaults.
 NUMERIC = {
+    "weight_sentiment": (5.0, 0.0, 30.0, "权重与周期", "恐惧与贪婪指数权重"),
+    "sentiment_low": (25.0, 0.0, 49.0, "指标", "极端恐惧阈值"),
+    "sentiment_high": (75.0, 51.0, 100.0, "指标", "极端贪婪阈值"),
     "ema_fast": (20, 2, 100, "指标", "EMA 快线周期"),
     "ema_slow": (50, 3, 300, "指标", "EMA 慢线周期"),
     "rsi_period": (14, 2, 60, "指标", "RSI 周期"),
@@ -57,6 +60,10 @@ NUMERIC = {
     "portfolio_risk_multiple": (3.0, 1.0, 3.0, "加减仓与关联风险", "组合止损预算 / 单笔预算"),
 }
 FLAGS = {
+    "sentiment_enabled": ("指标", "BTC 恐惧与贪婪指数（加密市场参考）"),
+    "sentiment_contrarian": ("指标", "情绪逆向评估（关闭则采用顺势评估）"),
+    "sentiment_block_adverse": ("指标", "极端情绪与方向相反时阻止开仓"),
+    "sentiment_require_fresh": ("指标", "情绪来源缺失或过期时阻止开仓"),
     "ema_enabled": ("指标", "EMA 趋势"),
     "rsi_enabled": ("指标", "RSI 动量"),
     "macd_enabled": ("指标", "MACD 动量"),
@@ -84,7 +91,7 @@ FLAGS = {
     "trend_exit_enabled": ("开仓与退出", "趋势反转退出"),
     "event_exit_enabled": ("开仓与退出", "事件风险退出"),
     "add_enabled": ("加减仓与关联风险", "允许策略加仓"),
-    "profitable_add_only": ("加减仓与关联风险", "仅盈利加仓"),
+    "profitable_add_only": ("加减仓与关联风险", "普通加仓仅限盈利（浮亏加仓独立控制）"),
     "invalid_signal_reduce_enabled": ("加减仓与关联风险", "失效信号减仓"),
     "price_reduce_enabled": ("加减仓与关联风险", "到减仓观察价自动减仓"),
 }
@@ -193,7 +200,14 @@ Parameters = create_model(
         k: (
             bool,
             Field(
-                default=k not in ("price_reduce_enabled", "fixed_stop_enabled"),
+                default=k
+                not in (
+                    "price_reduce_enabled",
+                    "fixed_stop_enabled",
+                    "sentiment_enabled",
+                    "sentiment_block_adverse",
+                    "sentiment_require_fresh",
+                ),
                 title=v[1],
                 json_schema_extra={"group": v[0]},
             ),

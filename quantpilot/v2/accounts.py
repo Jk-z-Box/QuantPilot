@@ -14,6 +14,7 @@ from .logic import check_version
 from .margin import CLOSE_FEE_RATE, MAINTENANCE_RATE, estimates, mode
 from .models import PROFILES, pair_enabled, policy_matches
 from .notifications import trade_event
+from .position_automation import loss_add_ready, update_trailing
 from .position_changes import levels, position_guard, record_changes
 from .rules import active, effective
 
@@ -249,10 +250,11 @@ def size_order(account, book, opportunity, quotes, instruments, profile, now, ad
         if not old.get("initial_qty"):
             raise ValueError("旧仓位缺少初始币数量，不允许自动加仓")
         target = D(old["initial_qty"]) * D(ratios[old["adds"]]) * unit
-        if parameters["profitable_add_only"] and price * (1 if side == "long" else -1) <= D(old["entry"]) * (
-            1 if side == "long" else -1
-        ):
-            raise ValueError("不允许亏损加仓")
+        if (price - D(old["entry"])) * (1 if side == "long" else -1) <= 0:
+            if parameters["profitable_add_only"] and not loss_add_ready(
+                account, key, old, quotes[key], opportunity, now
+            ):
+                raise ValueError("浮亏加仓未启用、未到区间或仍在冷却；不新增风险")
     elif old:
         raise ValueError("已有仓位")
     amount = min(target, headroom)
@@ -449,6 +451,7 @@ class PaperBroker:
                 old["original_qty"] = str(D(old["original_qty"]) + qty)
                 old["margin"] = str(D(old["margin"]) + sizing["notional"] / sizing["leverage"])
                 old["adds"] += 1
+                old["last_add_at"] = now
                 old["logic_reporting_net"] = str(
                     D(old.get("logic_reporting_net", old.get("logic_net", 0)))
                     - fee * (price if inverse(old) else 1)
@@ -571,6 +574,8 @@ class PaperBroker:
                     p["stop"] = str(
                         max(D(p["stop"]), D(p["entry"])) if sign == 1 else min(D(p["stop"]), D(p["entry"]))
                     )
+            if reason == "trailing_take_profit":
+                p.setdefault("trailing", {})["done"] = True
             if reason == "risk_reduce":
                 p["risk_reduced"] = True
             p["logic_reporting_net"] = str(
@@ -664,6 +669,10 @@ class PaperBroker:
                 and (price - D(marked["liquidation"])) * sign <= price * D(".03")
             ):
                 self.close(aid, key, q, reason="liquidation_distance")
+                continue
+            trail_hit, trail_ratio = update_trailing(self.store, account, key, q, opportunities.get(key))
+            if trail_hit:
+                self.close(aid, key, q, ratio=trail_ratio, reason="trailing_take_profit")
                 continue
             for i, target in enumerate(p["targets"]):
                 if (

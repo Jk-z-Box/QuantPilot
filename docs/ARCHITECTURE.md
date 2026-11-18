@@ -1,55 +1,34 @@
-# 架构
+# Architecture / 架構
+
+QuantPilot runs as one application process per SQLite data directory. A separate unprivileged Codex broker holds server-side login state. Persistent keys, databases and broker credentials are outside the source tree.
 
 ```text
-浏览器 ─ HTTPS/同源/会话/CSRF ─ FastAPI
-                                  │
-                  ┌───────────────┼────────────────┐
-                  ↓               ↓                ↓
-           Market 公共数据    Engine 模拟账本    Advisor 可选复核
-                  │               │                │
-         CCXT 允许列表       SQLite 事务       OpenAI Responses
-                  ↑               ↑          只返回校验后的文字
-                  └── Runner ─────┘
-                      15秒轮询
+Exchange public/private WebSocket + bounded REST recovery
+                    ↓
+MarketStreams / FundsStreams → Workspace → Realtime → browser WebSocket / SSE
+                    ↓              ↓
+completed candles → signals → account sizing/risk → optional AI review
+                                   ↓
+                     PaperBroker / ExchangeBroker
+                                   ↓
+            durable ledger, order journal, native protection
 ```
 
-## 模块职责
-
-| 模块 | 责任 |
+| Module | Responsibility / 職責 |
 |---|---|
-| `config.py` | 校验配置、密码 scrypt、原子保存、配置写锁、拒绝实盘设置 |
-| `store.py` | SQLite WAL、事务、幂等订单、审计、会话、加密凭据 |
-| `market.py` | 现货市场元数据、盘口、完成 K 线、精度/最小订单验证、只读余额 |
-| `strategy.py` | 确定性指标和规则信号，无网络/写入权限 |
-| `engine.py` | 风控、精确金额计算、模拟成交、保护卖出、组合估值 |
-| `runner.py` | 单进程自动执行、重启停用、按完成 K 线幂等 |
-| `advisor.py` | 固定 OpenAI 端点、显式请求、结构化响应校验，无订单权限 |
-| `app.py` | 会话、同源保护、API、静态控制台、单服务文件锁 |
-| `cli.py` | 终端初始化、密码与凭据管理、服务操作、备份和规则 JSON |
+| `app.py`, `v2/api.py`, `admin_api.py` | Session, CSRF, bounded request models, current UI and administration |
+| `store.py` | Exclusive pooled SQLite connections, transactional state and encrypted vault |
+| `v2/market_streams.py`, `funds.py`, `realtime.py` | Exchange subscriptions, reconciliation, fanout and freshness |
+| `v2/signals.py`, `rules.py`, `logic.py` | Active parameters, scoring, logic versions, review and backups |
+| `v2/accounts.py`, `execution.py`, `risk_context.py` | Sizing, balances, exposure, liquidation and order lifecycle |
+| `v2/position_automation.py` | Explicit loss-addition eligibility and durable one-shot trailing exits |
+| `v2/journal.py` | Decision snapshots, fills, costs and retrospective evidence |
+| `v2/feeds.py`, `sentiment.py`, `research.py` | Sourced observations, publication dates, scope and AI retrieval verification |
+| `v2/action_review.py`, `position_review.py` | Shared market review, per-account risk review and position plans |
+| `retired.py` | Backup-first removal of v1-only data; no current ledger deletion |
 
-## 订单顺序
+The browser consumes server state and does not hold exchange keys or make exchange orders. Refresh authenticates before showing either the app or login, then restores tab-local navigation. Account edits use compare-and-swap revisions; stale forms cannot overwrite new settings.
 
-1. 验证请求结构、有限数字、有效数量、幂等编号。
-2. 查询持久化订单。编号/请求一致直接返回已有结果；编号复用不同请求拒绝。
-3. 在任何行情访问前拒绝 `mode=live`。
-4. 获取独立的最新盘口，校验时间、价差、现货市场、数量精度和交易所限额。
-5. 买入需要所有现有仓位的有效估值；卖出只需要本市场行情，避免其他市场故障阻断减仓。
-6. `BEGIN IMMEDIATE` 串行化账户修改，再次核对幂等、行情年龄、订单到期、策略版本和暂停标志。
-7. 买单校验余额（包含费用）、敞口、单仓金额、止损保护、预计止损损失和每日权益损失；卖单不能超过现有仓位。
-8. 同一数据库事务内更新现金、成本、数量、累计费用、已实现盈亏和订单结果/审计。
+瀏覽器只顯示伺服器狀態，不持有交易所密鑰或直接下單。實時連線會重連及補讀；時間戳、資料過期和網頁延遲分開呈現。策略分數、AI 意見和實際成交分開記錄，不能互相替代。
 
-网络调用发生在账本事务之外。并发导致需要估值的仓位集合发生变化时，新增开仓失败关闭；不会使用缺失的价格估计资产。失败的客户端重试复用订单编号，浏览器在 sessionStorage 保存待确认请求（不包含凭据）。
-
-## 数据时间与模拟成交
-
-盘口记录交易所时间与接收时间。缺少交易所时间戳时可以展示，但不能成交。完成 K 线使用起始时间+周期结束时间，预留 2 秒完成余量；重复、缺失、无效或过旧 K 线拒绝。未完成的当前 K 线不进入策略。
-
-买单按卖一+滑点模拟，卖单按买一−滑点模拟；费用逐笔记账。限价 IOC 不可成交即拒绝。本版本不模拟深度、成交队列、部分成交或真实冲击成本，因此结果可能显著优于或劣于真实交易。
-
-保护订单从持仓持久化的止损/止盈价生成。触发时按当时市场价格成交，不假定跳空后仍能在止损价卖出。逐市场隔离异常，避免一个市场故障跳过其他市场的检查。网络错误不会伪造可交易价格。
-
-## 并发与恢复
-
-仅允许一个服务进程/worker。文件锁防止误启动第二个服务；SQLite 事务保障 Web 与后台线程的一致性，也支持 CLI 暂停操作。重启保留模拟仓位及保护价，自动策略回到关闭状态，保护轮询继续。
-
-策略版本在每次配置变更时更新。后台已有的旧策略计算在提交前核对版本，不能在停用或修改后继续开仓。SQLite 不替代分布式队列，本版不能部署多个副本。
+Paper and real execution share risk rules, but paper fills are estimates. New exposure fails closed on missing risk inputs or unknown orders. Existing native protection remains at the exchange when the app is unavailable. Server-side trailing logic requires a working server and fresh quotes.

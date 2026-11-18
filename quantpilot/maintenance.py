@@ -13,9 +13,9 @@ import httpx
 
 from .config import atomic_json
 
-VERSION = "0.13.1"
+VERSION = "0.14.0"
 REPOSITORY = "Jk-z-Box/QuantPilot"
-BRANCH = "feat/mission-control-v2"
+BRANCH = "main"
 STATUS = Path("/var/lib/quantpilot-maintenance/status.json")
 
 
@@ -60,10 +60,8 @@ def status():
 
 def can_update(store, db):
     accounts = store.read(db, "v2_accounts")
-    if any(a["auto"] for a in accounts.values()) or store.read(db, "strategy")["enabled"]:
+    if any(a["auto"] for a in accounts.values()):
         raise ValueError("请先暂停所有账户的自动交易，再更新系统")
-    if store.read(db, "account")["positions"]:
-        raise ValueError("旧版模拟账本仍有持仓，暂不能更新")
     if any(b["positions"] for b in store.read(db, "v2_ledgers").values()) or any(
         store.read(db, "v2_managed").values()
     ):

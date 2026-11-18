@@ -513,6 +513,7 @@ class PositionReviews:
                 else None
             )
         return {
+            "trailing": p.get("trailing") if sizing.get("trailing_take_profit", {}).get("enabled") else None,
             "stop": p.get("stop"),
             "targets": [
                 {**t, "stage": i + 1}

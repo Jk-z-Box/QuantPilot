@@ -12,6 +12,8 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from .public_feeds import ETF_URL, FARSIDE, btc_etf, company_news, farside_etf
+from .sentiment import API as SENTIMENT_API
+from .sentiment import observation
 
 FED = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
 
@@ -156,6 +158,14 @@ class Feeds:
     def evidence(self, item):
         now = time.time()
         out = []
+        if item.get("group") == "crypto":
+            sentiment = self.cached(
+                "btc-sentiment",
+                3600,
+                lambda: observation(self.get(SENTIMENT_API, {"limit": 30}), time.time()),
+            )
+            if sentiment:
+                out.append({**sentiment, "status": "fresh" if sentiment["expires_at"] > now else "stale"})
         asset = item["symbol"].split("/")[0]
         macro = self.macro()
         if macro:

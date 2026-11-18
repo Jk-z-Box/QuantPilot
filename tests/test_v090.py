@@ -296,9 +296,28 @@ def test_account_feature_controls_roundtrip(logged, account):
         "profit_trailing_enabled": True,
         "ai_take_profit_enabled": True,
     }
-    assert logged.post("/api/v2/accounts", json=body).status_code == 200
+    assert (
+        logged.post(
+            "/api/v2/accounts",
+            json={
+                **body,
+                "expected_revision": next(
+                    a["revision"]
+                    for a in logged.get("/api/v2/state").json()["accounts"]
+                    if a["id"] == body["id"]
+                ),
+            },
+        ).status_code
+        == 200
+    )
     a = next(a for a in logged.get("/api/v2/state").json()["accounts"] if a["id"] == account["id"])
     assert a["profit_trailing_enabled"] and a["ai_take_profit_enabled"]
-    assert logged.post("/api/v2/accounts", json={**body, "position_review_enabled": False}).status_code == 200
+    assert (
+        logged.post(
+            "/api/v2/accounts",
+            json={**body, "position_review_enabled": False, "expected_revision": a["revision"]},
+        ).status_code
+        == 200
+    )
     a = next(a for a in logged.get("/api/v2/state").json()["accounts"] if a["id"] == account["id"])
     assert not a["profit_trailing_enabled"] and not a["ai_take_profit_enabled"]

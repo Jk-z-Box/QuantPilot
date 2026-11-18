@@ -30,6 +30,14 @@ class Watchlist(Model):
     items: list[Instrument] = Field(min_length=1, max_length=20)
 
 
+class AccountSave(Account):
+    expected_revision: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+
+class DisplayOrder(Model):
+    ids: list[str] = Field(max_length=20)
+
+
 class Close(Model):
     instrument_id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,64}$")
     ratio: float = Field(default=1, gt=0, le=1)
@@ -183,6 +191,10 @@ def install(app, workspace, session, mutation):
     def watch(body: Watchlist):
         return safe(workspace.save_watchlist, [i.model_dump() for i in body.items])
 
+    @app.put("/api/v2/display-order", dependencies=[Depends(mutation)])
+    def display_order(body: DisplayOrder):
+        return safe(workspace.save_display_order, body.ids)
+
     @app.get("/api/v2/markets", dependencies=[Depends(session)])
     def markets(
         exchange: str = "binance",
@@ -236,8 +248,12 @@ def install(app, workspace, session, mutation):
         return safe(workspace.preferences, body.model_dump())
 
     @app.post("/api/v2/accounts", dependencies=[Depends(mutation)])
-    def account(body: Account):
-        return safe(workspace.save_account, body.model_dump())
+    def account(body: AccountSave):
+        if body.id and body.expected_revision is None:
+            raise HTTPException(409, "请刷新网页并重新打开账户设置后保存")
+        return safe(
+            workspace.save_account, body.model_dump(exclude={"expected_revision"}), body.expected_revision
+        )
 
     @app.delete("/api/v2/accounts/{aid}", dependencies=[Depends(mutation)])
     def delete_account(aid: str):

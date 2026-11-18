@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from typing import Literal
 
@@ -112,6 +114,28 @@ def policy_matches(opportunity, preferences):
     return "policy" not in opportunity or opportunity["policy"] == signal_policy(preferences)
 
 
+class LossAdd(Model):
+    enabled: bool = False
+    trigger_pct: float = Field(default=1, ge=0.1, le=20)
+    max_loss_pct: float = Field(default=3, ge=0.1, le=30)
+    cooldown: int = Field(default=300, ge=30, le=86400, strict=True)
+
+    @model_validator(mode="after")
+    def ordered_loss(self):
+        if self.trigger_pct > self.max_loss_pct:
+            raise ValueError("浮亏触发比例不能超过允许浮亏上限")
+        return self
+
+
+class TrailingTakeProfit(Model):
+    enabled: bool = False
+    activation_pct: float = Field(default=1, ge=0.1, le=100)
+    distance_mode: Literal["percent", "atr"] = "percent"
+    distance_pct: float = Field(default=0.5, ge=0.05, le=30)
+    atr_multiple: float = Field(default=2, ge=0.1, le=20)
+    exit_ratio: float = Field(default=1, ge=0.05, le=1)
+
+
 class Sizing(Model):
     instrument_id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,64}$")
     mode: Literal["fixed", "maximum", "system"] = "maximum"
@@ -119,6 +143,8 @@ class Sizing(Model):
     system_level: Literal["conservative", "balanced", "aggressive"] = "balanced"
     leverage: int = Field(default=1, ge=1, le=1000)
     margin_mode: Literal["isolated", "cross"] = "isolated"
+    loss_add: LossAdd = Field(default_factory=LossAdd)
+    trailing_take_profit: TrailingTakeProfit = Field(default_factory=TrailingTakeProfit)
     add_count: int | None = Field(default=None, ge=0, le=5)
     add_ratios: list[float] = Field(default_factory=list, max_length=5)
 
@@ -219,3 +245,7 @@ def pair_enabled(account, key):
         s["instrument_id"] == key and (s.get("mode") == "system" or s.get("quantity"))
         for s in account.get("sizing", [])
     ) and (account["kind"] == "paper" or key in account.get("allowed", []))
+
+
+def account_revision(account):
+    return hashlib.sha256(json.dumps(account, sort_keys=True, separators=(",", ":")).encode()).hexdigest()

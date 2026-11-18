@@ -284,7 +284,17 @@ def test_points_null_when_unplanned_and_take_profit_stage(workspace, account, op
 
 def test_account_review_controls_api(logged, account):
     r = logged.post(
-        "/api/v2/accounts", json={**account, "position_review_enabled": True, "position_review_interval": 180}
+        "/api/v2/accounts",
+        json={
+            **account,
+            "position_review_enabled": True,
+            "position_review_interval": 180,
+            "expected_revision": next(
+                a["revision"]
+                for a in logged.get("/api/v2/state").json()["accounts"]
+                if a["id"] == account["id"]
+            ),
+        },
     )
     assert r.status_code == 200
     a = next(a for a in logged.get("/api/v2/state").json()["accounts"] if a["id"] == account["id"])

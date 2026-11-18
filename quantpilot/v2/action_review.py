@@ -21,7 +21,13 @@ from .models import Model, pair_enabled
 from .notifications import emit
 from .risk_context import account_context
 
-PROTECTIVE = {"stop_loss", "take_profit", "liquidation_distance", "protection_missing"}
+PROTECTIVE = {
+    "trailing_take_profit",
+    "stop_loss",
+    "take_profit",
+    "liquidation_distance",
+    "protection_missing",
+}
 
 
 class Decision(Model):

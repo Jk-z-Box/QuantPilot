@@ -18,6 +18,7 @@ from .logic import check_version
 from .margin import mode
 from .models import policy_matches
 from .notifications import trade_event
+from .position_automation import loss_add_ready, update_trailing
 from .position_changes import levels, record_changes
 from .rules import effective
 
@@ -93,7 +94,7 @@ class ExchangeBroker:
                 "cross_margin",
             )
             ready = (
-                cert["version"] == "0.13.1"
+                cert["version"] == "0.14.0"
                 and cert["exchange"] == account["exchange"]
                 and cert.get("settle") == account.get("settle", "USDT")
                 and (
@@ -213,7 +214,10 @@ class ExchangeBroker:
                 )
                 if opportunity.get("position_add_at") is not None:
                     trigger = D(opportunity["position_add_at"])
-                if (D(quotes[key]["mid"]) - trigger) * sign < 0:
+                if (
+                    not loss_add_ready(account, key, existing, quotes[key], opportunity)
+                    and (D(quotes[key]["mid"]) - trigger) * sign < 0
+                ):
                     raise ValueError("未到加仓观察价")
             identity = (
                 "qp"
@@ -470,6 +474,8 @@ class ExchangeBroker:
                         "margin_mode": sizing["margin_mode"],
                         "liquidation": str(liquidation),
                         "adds": old["adds"] + 1 if old else 0,
+                        "last_add_at": time.time(),
+                        "trailing": old.get("trailing", {}) if old else {},
                         "tp_done": old["tp_done"] if old else [],
                         "initial_notional": initial,
                         "initial_qty": old.get("initial_qty") if old else str(base_qty),
@@ -786,8 +792,8 @@ class ExchangeBroker:
                 if base_qty > D(p["qty"]) * D("1.000001") or current["side"] != p["side"]:
                     self.freeze(aid, "仓位数量或方向发生外部变化，停止自动干预")
                     continue
-                if not op and not protection_missing:
-                    continue
+                trail_hit, trail_ratio = update_trailing(self.store, account, key, q, op)
+                has_op = bool(op)
                 op = op or {}
                 sign = 1 if p["side"] == "long" else -1
                 price = D(q["mid"])
@@ -795,7 +801,8 @@ class ExchangeBroker:
                 close = (
                     protection_missing
                     or (
-                        not op.get("position_reviewed")
+                        has_op
+                        and not op.get("position_reviewed")
                         and parameters["trend_exit_enabled"]
                         and op.get("direction") not in (p["side"], "wait", "flat")
                     )
@@ -808,9 +815,12 @@ class ExchangeBroker:
                     or (liq > 0 and (price - liq) * sign / price < D(".05"))
                     or (price - D(p["stop"])) * sign <= 0
                 )
+                trail_only = trail_hit and not close
+                close = close or trail_hit
                 reduce = (
                     (
-                        not op.get("position_reviewed")
+                        has_op
+                        and not op.get("position_reviewed")
                         and parameters["invalid_signal_reduce_enabled"]
                         and (not op.get("valid") or op.get("expires_at", 0) <= time.time())
                     )
@@ -824,7 +834,11 @@ class ExchangeBroker:
                 ) and not p["risk_reduced"]
                 if close or reduce:
                     exit_ratio = (
-                        1 if close else op.get("ai", {}).get("reduce_ratio", parameters["risk_reduce_ratio"])
+                        trail_ratio
+                        if trail_only
+                        else 1
+                        if close
+                        else op.get("ai", {}).get("reduce_ratio", parameters["risk_reduce_ratio"])
                     )
                     if getattr(self, "action_review", None):
                         reason = (
@@ -834,6 +848,8 @@ class ExchangeBroker:
                             if (price - D(p["stop"])) * sign <= 0
                             else "liquidation_distance"
                             if liq > 0 and (price - liq) * sign / price < D(".05")
+                            else "trailing_take_profit"
+                            if trail_only
                             else "risk_exit"
                             if close
                             else "risk_reduce"
@@ -849,7 +865,7 @@ class ExchangeBroker:
                     identity = (
                         "qp"
                         + hashlib.sha256(
-                            f"{aid}:{key}:{p['legs'][0]['client_id']}:{'exit' if close else 'reduce'}".encode()
+                            f"{aid}:{key}:{p['legs'][0]['client_id']}:{'trailing' if trail_only else 'exit' if close else 'reduce'}".encode()
                         ).hexdigest()[:24]
                     )
                     with self.store.transaction() as db:
@@ -890,7 +906,11 @@ class ExchangeBroker:
                                     )
                                 ),
                                 "price": confirmed.get("average"),
-                                "reason": "risk_exit" if close else "risk_reduce",
+                                "reason": "trailing_take_profit"
+                                if trail_only
+                                else "risk_exit"
+                                if close
+                                else "risk_reduce",
                             },
                         )
                         with self.store.transaction() as db:
@@ -901,7 +921,11 @@ class ExchangeBroker:
                                 key,
                                 p,
                                 {
-                                    "reason": "risk_exit" if close else "risk_reduce",
+                                    "reason": "trailing_take_profit"
+                                    if trail_only
+                                    else "risk_exit"
+                                    if close
+                                    else "risk_reduce",
                                     "filled": confirmed.get("filled"),
                                     "price": confirmed.get("average"),
                                     "fee": confirmed.get("fee"),
@@ -910,7 +934,10 @@ class ExchangeBroker:
                                 },
                                 False,
                             )
-                            m[aid][key]["risk_reduced"] = True
+                            if not trail_only:
+                                m[aid][key]["risk_reduced"] = True
+                            if trail_only:
+                                m[aid][key].setdefault("trailing", {})["done"] = True
                             self.store.write(db, "v2_managed", m)
                         if protection_missing:
                             self.freeze(aid, "原生止损异常，已确认保护性退出；请人工核对")

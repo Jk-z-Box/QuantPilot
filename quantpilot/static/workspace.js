@@ -56,13 +56,32 @@ const money = (value, settle = "USDT") => fmt(value, settle === "USDT" ? 2 : 8);
 const exchangeName = { binance: "BINANCE", okx: "OKX", gate: "GATE" },
   kindName = { paper: "本地模拟", demo: "交易所测试", live: "真实账户" },
   directions = { long: "做多", short: "做空", wait: "等待", flat: "震荡" };
+function savedView() {
+  try {
+    return JSON.parse(sessionStorage.getItem("qp-view") || "{}");
+  } catch {
+    return {};
+  }
+}
+function rememberView() {
+  try {
+    sessionStorage.setItem(
+      "qp-view",
+      JSON.stringify({ page, selected, chartFrame }),
+    );
+  } catch {}
+}
 let scoreDirty = false;
 let state = null,
   csrf = "",
-  selected = "",
-  page = "market",
+  selected = savedView().selected || "",
+  page = savedView().page || "market",
   rows = [],
-  chartFrame = "1h",
+  chartFrame = ["5m", "15m", "1h", "4h", "1d", "1w"].includes(
+    savedView().chartFrame,
+  )
+    ? savedView().chartFrame
+    : "1h",
   chartCount = 80,
   chartGeneration = 0,
   loading = false,
@@ -102,7 +121,7 @@ async function api(path, body, method) {
       $("app").hidden = true;
       $("login").hidden = false;
     }
-    throw Error(
+    const failure = Error(
       typeof data.detail === "string"
         ? {
             authentication_required: "请重新登录",
@@ -112,6 +131,8 @@ async function api(path, body, method) {
           }[data.detail] || data.detail
         : "请求未通过校验",
     );
+    failure.status = r.status;
+    throw failure;
   }
   return data;
 }
@@ -173,28 +194,33 @@ $("dialog").addEventListener("click", (e) => {
   }
 });
 function accountPayload(a) {
-  return Object.fromEntries(
-    [
-      "id",
-      "name",
-      "kind",
-      "exchange",
-      "capital",
-      "settle",
-      "auto",
-      "balance_stream_enabled",
-      "ai_action_enabled",
-      "position_review_enabled",
-      "position_review_interval",
-      "profit_trailing_enabled",
-      "ai_take_profit_enabled",
-      "allowed",
-      "sizing",
-    ].map((k) => [k, a[k]]),
-  );
+  return {
+    ...Object.fromEntries(
+      [
+        "id",
+        "name",
+        "kind",
+        "exchange",
+        "capital",
+        "settle",
+        "auto",
+        "balance_stream_enabled",
+        "ai_action_enabled",
+        "strategy_recheck_enabled",
+        "position_review_enabled",
+        "position_review_interval",
+        "profit_trailing_enabled",
+        "ai_take_profit_enabled",
+        "allowed",
+        "sizing",
+      ].map((k) => [k, a[k]]),
+    ),
+    expected_revision: a.revision,
+  };
 }
 function go(next) {
-  page = next;
+  page = Object.hasOwn(titles, next) ? next : "market";
+  rememberView();
   window.scrollTo({ top: 0, behavior: "instant" });
   document
     .querySelectorAll("[data-panel]")
@@ -267,8 +293,12 @@ function stop() {
 }
 async function start() {
   $("login").hidden = true;
-  $("app").hidden = false;
   await refresh();
+  if (!state) throw Error("工作区暂不可用，请重试");
+  $("sessionLoading").hidden = true;
+  $("app").hidden = false;
+  $("timeframe").value = chartFrame;
+  go(page);
   stop();
   startFunds();
   await loadDisplayPreference();
@@ -279,8 +309,14 @@ async function start() {
   await loadChart();
 }
 async function refresh() {
-  if (loading) return;
-  loading = true;
+  if (loading) {
+    await loading;
+    return refresh();
+  }
+  let finishLoading;
+  loading = new Promise((resolve) => {
+    finishLoading = resolve;
+  });
   try {
     const incoming = await api("/api/v2/state"),
       live = state;
@@ -316,11 +352,13 @@ async function refresh() {
       '<i class="dot"></i> 已连接 · ' +
       new Date().toLocaleTimeString("zh-CN", { hour12: false });
   } catch (e) {
+    if (!state) throw e;
     error(e.message);
     $("connection").textContent = "连接中断 · 暂停展示有效机会";
     if (state)
       Object.values(state.opportunities).forEach((o) => (o.valid = false));
   } finally {
+    finishLoading();
     loading = false;
   }
 }
@@ -362,7 +400,13 @@ function render() {
     : "";
 }
 function renderTiles() {
-  $("watchTiles").innerHTML = state.watchlist
+  const order = state.display_order || [];
+  const ordered = [...state.watchlist].sort(
+    (a, b) =>
+      (order.includes(a.id) ? order.indexOf(a.id) : 999) -
+      (order.includes(b.id) ? order.indexOf(b.id) : 999),
+  );
+  $("watchTiles").innerHTML = ordered
     .map((i) => {
       const q = state.quotes[i.id],
         o = state.opportunities[i.id],
@@ -374,6 +418,7 @@ function renderTiles() {
     (b) =>
       (b.onclick = () => {
         selected = b.dataset.instrument;
+        rememberView();
         rows = [];
         chartGeneration++;
         renderTiles();
@@ -451,6 +496,7 @@ function renderOpportunity() {
     })
     .join("");
   const names = {
+    sentiment: "恐惧与贪婪指数 · BTC 市场参考",
     etf: "ETF 实际披露资金流",
     options: "期权 / 交割 / 最大痛点",
     liquidation: "清算量与热力图",
@@ -488,7 +534,17 @@ function renderOpportunity() {
       (e) =>
         `<div class="evidence-row"><div><b>${names[e.category] || esc(e.category)}</b><span class="badge ${e.status === "fresh" ? "good" : e.status === "stale" ? "bad" : ""}">${{ fresh: "数据有效", stale: "已过期", missing: "暂缺数据" }[e.status] || "未验证"}</span></div><p>${esc(e.note || "")} ${e.value !== undefined ? "· " + fmt(e.value, 0) : ""}</p>${e.source ? `<p>${esc(e.source)} ${e.published_at ? "· " + time(e.published_at) : ""}</p>` : ""}${
           e.details
-            ? `<details data-evidence="${esc(e.category + "|" + e.source)}" ${expanded.has(e.category + "|" + e.source) ? "open" : ""}><summary>查看数据与事件</summary>${e.details.funding_rate !== undefined ? `<p>资金费率 ${e.details.funding_rate == null ? "缺失" : fmt(e.details.funding_rate * 100, 4) + "%"} · OI ${fmt(e.details.open_interest, 2)}</p>` : ""}${e.details.scope ? `<p>${esc(e.details.scope)}</p>` : ""}${e.details.max_pain ? `<p>最近到期 ${time(e.details.expiry)}<br>最大痛点估算 ${price(e.details.max_pain)}<br>看涨 OI ${fmt(e.details.call_oi, 0)} / 看跌 OI ${fmt(e.details.put_oi, 0)}</p>` : ""}${(e.details.events || []).map((x) => `<p>${esc(x.title)} · ${time(x.event_at)}</p>`).join("")}${(
+            ? `<details data-evidence="${esc(e.category + "|" + e.source)}" ${expanded.has(e.category + "|" + e.source) ? "open" : ""}><summary>查看数据与事件</summary>${e.details.funding_rate !== undefined ? `<p>资金费率 ${e.details.funding_rate == null ? "缺失" : fmt(e.details.funding_rate * 100, 4) + "%"} · OI ${fmt(e.details.open_interest, 2)}</p>` : ""}${e.details.scope ? `<p>${esc(e.details.scope)}</p>` : ""}${
+                e.category === "sentiment"
+                  ? (e.details.history || [])
+                      .slice(0, 7)
+                      .map(
+                        (x) =>
+                          `<p>${time(x.timestamp)} · ${fmt(x.value, 0)}/100</p>`,
+                      )
+                      .join("")
+                  : ""
+              }${e.details.max_pain ? `<p>最近到期 ${time(e.details.expiry)}<br>最大痛点估算 ${price(e.details.max_pain)}<br>看涨 OI ${fmt(e.details.call_oi, 0)} / 看跌 OI ${fmt(e.details.put_oi, 0)}</p>` : ""}${(e.details.events || []).map((x) => `<p>${esc(x.title)} · ${time(x.event_at)}</p>`).join("")}${(
                 e.details.news || []
               )
                 .slice(0, 4)
@@ -550,6 +606,7 @@ async function loadChart() {
       return;
     rows = data.candles;
     chartFrame = frame;
+    rememberView();
     $("chartEmpty").hidden = true;
     $("chartFresh").textContent =
       (data.reference
@@ -1170,7 +1227,7 @@ function renderPositions() {
                 : p.liquidation_status === "no_positive_price"
                   ? "未计划（当前无正价格强平线）"
                   : planned(p.liquidation ?? p.liquidationPrice);
-          return `<tr data-position-account="${a.id}" data-position-symbol="${esc(p.instrument_id || p.symbol)}" data-position-side="${esc(p.side)}"><td data-label="账户 / 市场">${esc(a.name)}<small>${esc(item?.symbol || p.symbol)}</small></td><td data-label="方向 / 数量">${directions[p.side] || esc(p.side)} · ${(p.margin_mode || p.marginMode || "isolated") === "cross" ? "全仓" : "逐仓"} ${fmt(p.leverage, 0)}×<small><span data-current-base>${fmt(p.current_base_qty ?? p.qty ?? (p.contracts != null && p.contractSize != null ? (p.contracts * p.contractSize) / (settleOf(p.symbol) !== "USDT" ? p.markPrice : 1) : null), 8)}</span> ${esc((item?.symbol || p.symbol || "").split("/")[0])}${p.inverse || settleOf(p.symbol || item?.symbol) !== "USDT" ? `<br>${fmt(p.contracts ?? (Number(p.qty) * Number(p.entry)) / Number(p.contract_size), 4)} 张 · 面值 ${fmt(p.quote_face ?? p.contracts * p.contractSize)} USD` : ""}</small></td><td data-label="开仓均价">${price(p.entry ?? p.entryPrice)}</td><td data-label="浮动盈亏" class="${Number(p.unrealized ?? p.unrealizedPnl) >= 0 ? "positive" : "negative"}">${money(p.unrealized ?? p.unrealizedPnl, a.settle)} ${esc(a.settle || "USDT")}${p.price_verified === false ? "<small>行情待验证</small>" : ""}</td><td data-label="当前计划点位" class="position-points">${targetText}<br>止损：${planned(points.stop)}<br>加仓：${planned(points.add_at)}<br>减仓：${planned(points.reduce_at)}<br>${a.kind === "paper" ? "预估强平" : "交易所强平"}：${liquidation}<small>${esc(points.review_status || "未计划")} · 点位不代表已成交</small></td><td data-label="操作">${a.kind === "paper" ? `<button class="text-button" data-close-position="${a.id}" data-position="${esc(p.instrument_id)}">减仓 / 平仓</button>` : "交易所原生保护"}</td></tr>`;
+          return `<tr data-position-account="${a.id}" data-position-symbol="${esc(p.instrument_id || p.symbol)}" data-position-side="${esc(p.side)}"><td data-label="账户 / 市场">${esc(a.name)}<small>${esc(item?.symbol || p.symbol)}</small></td><td data-label="方向 / 数量">${directions[p.side] || esc(p.side)} · ${(p.margin_mode || p.marginMode || "isolated") === "cross" ? "全仓" : "逐仓"} ${fmt(p.leverage, 0)}×<small><span data-current-base>${fmt(p.current_base_qty ?? p.qty ?? (p.contracts != null && p.contractSize != null ? (p.contracts * p.contractSize) / (settleOf(p.symbol) !== "USDT" ? p.markPrice : 1) : null), 8)}</span> ${esc((item?.symbol || p.symbol || "").split("/")[0])}${p.inverse || settleOf(p.symbol || item?.symbol) !== "USDT" ? `<br>${fmt(p.contracts ?? (Number(p.qty) * Number(p.entry)) / Number(p.contract_size), 4)} 张 · 面值 ${fmt(p.quote_face ?? p.contracts * p.contractSize)} USD` : ""}</small></td><td data-label="开仓均价">${price(p.entry ?? p.entryPrice)}</td><td data-label="浮动盈亏" class="${Number(p.unrealized ?? p.unrealizedPnl) >= 0 ? "positive" : "negative"}">${money(p.unrealized ?? p.unrealizedPnl, a.settle)} ${esc(a.settle || "USDT")}${p.price_verified === false ? "<small>行情待验证</small>" : ""}</td><td data-label="当前计划点位" class="position-points">${targetText}<br>止损：${planned(points.stop)}${points.trailing ? `<br>移动止盈：${points.trailing.done ? "已执行" : points.trailing.stop ? price(points.trailing.stop) : "等待启动"}<small>有利价格峰值 ${price(points.trailing.peak)}</small>` : ""}<br>加仓：${planned(points.add_at)}<br>减仓：${planned(points.reduce_at)}<br>${a.kind === "paper" ? "预估强平" : "交易所强平"}：${liquidation}<small>${esc(points.review_status || "未计划")} · 点位不代表已成交</small></td><td data-label="操作">${a.kind === "paper" ? `<button class="text-button" data-close-position="${a.id}" data-position="${esc(p.instrument_id)}">减仓 / 平仓</button>` : "交易所原生保护"}</td></tr>`;
         }),
       )
       .join("") ||
@@ -1326,6 +1383,47 @@ function bindAccounts() {
   );
 }
 $("addAccount").onclick = () => editAccount();
+const automationDefaults = {
+  loss_add: { enabled: false, trigger_pct: 1, max_loss_pct: 3, cooldown: 300 },
+  trailing_take_profit: {
+    enabled: false,
+    activation_pct: 1,
+    distance_mode: "percent",
+    distance_pct: 0.5,
+    atr_multiple: 2,
+    exit_ratio: 1,
+  },
+};
+function automationFields(name, config) {
+  const c = { ...automationDefaults[name], ...config };
+  const number = (key, label, min, max, step = "any", scale = 1) =>
+    `<label>${label}<input data-param="${key}" data-scale="${scale}" type="number" min="${min}" max="${max}" step="${step}" value="${esc(c[key] * scale)}" required></label>`;
+  return `<fieldset class="position-review-settings automation-controls" data-automation="${name}"><legend>${name === "loss_add" ? "浮亏加仓机会" : "移动止盈"}</legend><label class="check"><input class="auto-enabled" data-param="enabled" type="checkbox" ${c.enabled ? "checked" : ""}>启用此交易对的${name === "loss_add" ? "浮亏加仓评估" : "移动止盈"}</label><div class="form-grid">${
+    name === "loss_add"
+      ? number("trigger_pct", "价格浮亏达到 / %", 0.1, 20) +
+        number("max_loss_pct", "允许浮亏上限 / %", 0.1, 30) +
+        number("cooldown", "开仓或上次加仓后的冷却 / 秒", 30, 86400, 1)
+      : number("activation_pct", "有利价格变化达到 / %", 0.1, 100) +
+        `<label>回撤距离方式<select data-param="distance_mode"><option value="percent" ${c.distance_mode === "percent" ? "selected" : ""}>价格百分比</option><option value="atr" ${c.distance_mode === "atr" ? "selected" : ""}>1H ATR 倍数</option></select></label>` +
+        number("distance_pct", "回撤距离 / %", 0.05, 30) +
+        number("atr_multiple", "ATR 倍数", 0.1, 20) +
+        number("exit_ratio", "触发时平剩余仓位 / %", 5, 100, "any", 100)
+  }</div><p class="fine">${name === "loss_add" ? "按标的价格变化计算，不是杠杆收益率。浮亏仅触发重新评估；需有效同向机会、资金和强平风控通过。与常规加仓共用上方次数和比例预算，0 次仍禁止加仓，遵守账户 AI 审核。" : "保护线只随有利价格收紧，达到回撤线后执行一次分批或全部止盈；剩余仓位继续由原止损和固定止盈保护。停止自动开仓后仍执行已启用的持仓保护。ATR 缺失时不新建 ATR 保护线，已有线保留。服务器执行，断网时交易所原生止损仍保留。"}</p></fieldset>`;
+}
+function readAutomation(row, name) {
+  const result = {};
+  row
+    .querySelectorAll(`[data-automation="${name}"] [data-param]`)
+    .forEach((input) => {
+      result[input.dataset.param] =
+        input.type === "checkbox"
+          ? input.checked
+          : input.tagName === "SELECT"
+            ? input.value
+            : Number(input.value) / Number(input.dataset.scale || 1);
+    });
+  return result;
+}
 function editAccount(a) {
   modal(
     a ? "账户与仓位设置" : "添加一个账户",
@@ -1364,6 +1462,8 @@ function editAccount(a) {
         count: r.querySelector(".size-adds").value,
         ratios: r.querySelector(".size-ratios").value,
         open: r.querySelector("details").open,
+        loss_add: readAutomation(r, "loss_add"),
+        trailing_take_profit: readAutomation(r, "trailing_take_profit"),
       }),
     );
   }
@@ -1400,6 +1500,8 @@ function editAccount(a) {
                 .map((x) => Number((x * 100).toFixed(4)))
                 .join(", ") || "",
             open: !!setting,
+            loss_add: setting?.loss_add,
+            trailing_take_profit: setting?.trailing_take_profit,
           };
           const unit = i.symbol.split("/")[0];
           const held = (a?.summary?.positions || []).find(
@@ -1407,7 +1509,7 @@ function editAccount(a) {
           );
           if (held)
             d.margin_mode = held.margin_mode || held.marginMode || "isolated";
-          return `<div class="sizing-row" data-size-id="${i.id}"><label class="check"><input type="checkbox" class="allowed" ${d.checked ? "checked" : ""}><b>${esc(i.label)}</b><span class="muted small">${esc(i.symbol)} · ${paper ? "启用此交易对" : "授权自动交易"}</span></label><details ${d.open ? "open" : ""}><summary>数量、保证金、杠杆与加仓</summary><div class="sizing-grid"><label>仓位模式<select class="size-mode"><option value="maximum" ${d.mode === "maximum" ? "selected" : ""}>最大总持仓数量</option><option value="fixed" ${d.mode === "fixed" ? "selected" : ""}>固定首次开仓数量</option><option value="system" ${d.mode === "system" ? "selected" : ""}>由系统评估</option></select></label><label class="system-level-label">资金使用偏好<select class="size-level"><option value="conservative" ${d.system_level === "conservative" ? "selected" : ""}>保守 · 预留更多资金</option><option value="balanced" ${d.system_level === "balanced" ? "selected" : ""}>平衡 · 均衡利用资金</option><option value="aggressive" ${d.system_level === "aggressive" ? "selected" : ""}>激进 · 提高资金利用</option></select></label><label class="quantity-label">标的数量 / ${esc(unit)}<input class="size-quantity" type="number" min="0.00000001" max="1000000000" step="any" required value="${esc(d.quantity)}" placeholder="填写 ${esc(unit)} 数量"></label><label>保证金模式<select class="size-margin-mode" ${held ? 'data-held="true"' : ""}><option value="isolated" ${d.margin_mode === "isolated" ? "selected" : ""}>逐仓 · 保证金独立</option><option value="cross" ${d.margin_mode === "cross" ? "selected" : ""}>全仓 · 共享账户保证金</option></select><small class="margin-mode-note">${held ? "当前有持仓，平仓后才能切换模式。" : "仅此交易对生效；已有仓位不自动转换。"}</small></label><label>此交易对杠杆 / 倍<input class="size-leverage" type="number" min="1" max="1000" step="1" required value="${esc(d.leverage)}"></label><div class="limit-control"><button type="button" class="secondary load-limits">读取交易所上限</button><small class="limit-note">尚未核验。高于 1 倍必须通过服务器校验。</small></div><label>最多加仓次数<input class="size-adds" type="number" min="0" max="5" step="1" value="${esc(d.count)}" placeholder="留空：系统评估；0：不加仓"></label><label>每次加仓比例 / %<input class="size-ratios" value="${esc(d.ratios)}" placeholder="例如 25, 20" inputmode="decimal"></label></div><p class="sizing-help"><b>逐仓</b>：只使用分配给该仓位的保证金。<b>全仓</b>：同一账户的全仓仓位共享本钱包的 ${esc(f.settle.value)} 保证金，其他仓位盈亏会影响强平线；逐仓占用资金不参与共享。模拟采用统一费率估算，不等于所选交易所的实际强平价。<br>固定：每次初始开仓按填写数量，风控额度不足则不下单。最大：初始仓位由系统评估，后续加仓也不超过此总数量。<br><b>由系统评估</b>：无需填写币数量。保守 / 平衡 / 激进分别以可用资金的 20% / 40% / 70% 作为本次保证金及开仓费预算上限；止损风险预算分别为当前风险偏好额度的 50% / 75% / 100%。还需通过强平距离、相关敞口及总风险限制，实际用量可能更低。计划加仓时预留额度。<br><b>25, 20</b> 表示两次分别加「初始开仓数量」的 25% 和 20%。例如初始 0.01 BTC，对应 0.0025、0.002 BTC。不是剩余仓位的比例。次数和比例都留空时系统评估；只填次数时每次上限为初始数量的 25%；填 0 禁止加仓。</p></details></div>`;
+          return `<div class="sizing-row" data-size-id="${i.id}"><label class="check"><input type="checkbox" class="allowed" ${d.checked ? "checked" : ""}><b>${esc(i.label)}</b><span class="muted small">${esc(i.symbol)} · ${paper ? "启用此交易对" : "授权自动交易"}</span></label><details ${d.open ? "open" : ""}><summary>数量、保证金、杠杆与加仓</summary><div class="sizing-grid"><label>仓位模式<select class="size-mode"><option value="maximum" ${d.mode === "maximum" ? "selected" : ""}>最大总持仓数量</option><option value="fixed" ${d.mode === "fixed" ? "selected" : ""}>固定首次开仓数量</option><option value="system" ${d.mode === "system" ? "selected" : ""}>由系统评估</option></select></label><label class="system-level-label">资金使用偏好<select class="size-level"><option value="conservative" ${d.system_level === "conservative" ? "selected" : ""}>保守 · 预留更多资金</option><option value="balanced" ${d.system_level === "balanced" ? "selected" : ""}>平衡 · 均衡利用资金</option><option value="aggressive" ${d.system_level === "aggressive" ? "selected" : ""}>激进 · 提高资金利用</option></select></label><label class="quantity-label">标的数量 / ${esc(unit)}<input class="size-quantity" type="number" min="0.00000001" max="1000000000" step="any" required value="${esc(d.quantity)}" placeholder="填写 ${esc(unit)} 数量"></label><label>保证金模式<select class="size-margin-mode" ${held ? 'data-held="true"' : ""}><option value="isolated" ${d.margin_mode === "isolated" ? "selected" : ""}>逐仓 · 保证金独立</option><option value="cross" ${d.margin_mode === "cross" ? "selected" : ""}>全仓 · 共享账户保证金</option></select><small class="margin-mode-note">${held ? "当前有持仓，平仓后才能切换模式。" : "仅此交易对生效；已有仓位不自动转换。"}</small></label><label>此交易对杠杆 / 倍<input class="size-leverage" type="number" min="1" max="1000" step="1" required value="${esc(d.leverage)}"></label><div class="limit-control"><button type="button" class="secondary load-limits">读取交易所上限</button><small class="limit-note">尚未核验。高于 1 倍必须通过服务器校验。</small></div><label>最多加仓次数<input class="size-adds" type="number" min="0" max="5" step="1" value="${esc(d.count)}" placeholder="留空：系统评估；0：不加仓"></label><label>每次加仓比例 / %<input class="size-ratios" value="${esc(d.ratios)}" placeholder="例如 25, 20" inputmode="decimal"></label></div>${automationFields("loss_add", d.loss_add)}${automationFields("trailing_take_profit", d.trailing_take_profit)}<p class="sizing-help"><b>逐仓</b>：只使用分配给该仓位的保证金。<b>全仓</b>：同一账户的全仓仓位共享本钱包的 ${esc(f.settle.value)} 保证金，其他仓位盈亏会影响强平线；逐仓占用资金不参与共享。模拟采用统一费率估算，不等于所选交易所的实际强平价。<br>固定：每次初始开仓按填写数量，风控额度不足则不下单。最大：初始仓位由系统评估，后续加仓也不超过此总数量。<br><b>由系统评估</b>：无需填写币数量。保守 / 平衡 / 激进分别以可用资金的 20% / 40% / 70% 作为本次保证金及开仓费预算上限；止损风险预算分别为当前风险偏好额度的 50% / 75% / 100%。还需通过强平距离、相关敞口及总风险限制，实际用量可能更低。计划加仓时预留额度。<br><b>25, 20</b> 表示两次分别加「初始开仓数量」的 25% 和 20%。例如初始 0.01 BTC，对应 0.0025、0.002 BTC。不是剩余仓位的比例。次数和比例都留空时系统评估；只填次数时每次上限为初始数量的 25%；填 0 禁止加仓。</p></details></div>`;
         })
         .join("") ||
       '<p class="empty">此交易所尚无监测品种，请先在监测列表添加。</p>';
@@ -1425,10 +1527,20 @@ function editAccount(a) {
         r.querySelector(".size-level").disabled = !yes || !system;
         if (r.querySelector(".size-margin-mode").dataset.held)
           r.querySelector(".size-margin-mode").disabled = true;
+        r.querySelectorAll(".automation-controls").forEach((group) => {
+          const enabled = group.querySelector(".auto-enabled");
+          enabled.disabled = !yes;
+          group
+            .querySelectorAll(".form-grid input,.form-grid select")
+            .forEach((input) => (input.disabled = !yes || !enabled.checked));
+        });
         if (yes) r.querySelector("details").open = true;
       };
       r.querySelector(".allowed").onchange = update;
       r.querySelector(".size-mode").onchange = update;
+      r.querySelectorAll(".auto-enabled").forEach(
+        (input) => (input.onchange = update),
+      );
       update();
       r.querySelector(".load-limits").onclick = () =>
         action(async () => {
@@ -1489,9 +1601,12 @@ function editAccount(a) {
           margin_mode: r.querySelector(".size-margin-mode").value,
           add_count: count === "" ? null : Number(count),
           add_ratios: percentages.map((x) => Number(x) / 100),
+          loss_add: readAutomation(r, "loss_add"),
+          trailing_take_profit: readAutomation(r, "trailing_take_profit"),
         });
       });
       await api("/api/v2/accounts", {
+        expected_revision: a?.revision || null,
         id: a?.id || "",
         name: f.elements.namedItem("name").value.trim(),
         kind: f.kind.value,
@@ -2337,21 +2452,27 @@ $("help").onclick = () =>
     "从这里开始",
     `<div class="notice-box"><b>1 · 先看市场</b><p>点击顶部品种卡片切换 K 线；周线、日线、4 小时、1 小时共同参与机会评估。未收盘 K 线只展示，不参与评分。</p></div><div class="notice-box"><b>2 · 理解机会</b><p>达到你设置的有效分数且没有阻断项，机会才有效；默认 80 分，可在顶部修改。评分不等于胜率。两档止盈分别显示价格和比例；数据缺失、来源过期和风险事件都会影响有效性。</p></div><div class="notice-box"><b>3 · 用模拟账户验证</b><p>到账户页设置资金和仓位，再启用自动交易。系统会等待有效信号。重启后账户自动交易暂停，需要重新启用。</p></div><div class="notice-box"><b>4 · 连接真实账户</b><p>先添加账户、选择允许交易的品种、保存密钥并读取核对。真实下单需要服务端开关和当前账户的验收记录，界面会显示尚未满足的条件。</p></div>`,
   );
-action(async () => {
+async function restoreSession() {
+  $("sessionLoading").hidden = false;
+  $("retrySession").hidden = true;
   try {
     const session = await api("/api/session");
     csrf = session.csrf;
     await start();
-  } catch {
-    $("login").hidden = false;
+  } catch (e) {
     $("app").hidden = true;
+    $("login").hidden = e.status !== 401;
+    $("sessionLoading").hidden = e.status === 401;
+    $("retrySession").hidden = false;
   }
-});
+}
+$("retrySession").onclick = restoreSession;
+restoreSession();
 
 $("accountMenu").onclick = () => {
   modal(
     "工作区菜单",
-    `<div class="notice-box"><button id="menuHelp" class="text-button">查看使用指南</button></div><div class="notice-box"><a href="/legacy">打开旧版模拟账本</a></div><div class="notice-box"><button id="menuLogout" class="danger-outline">退出登录</button></div>`,
+    `<div class="notice-box"><button id="menuHelp" class="text-button">查看使用指南</button></div><div class="notice-box"><button id="menuLogout" class="danger-outline">退出登录</button></div>`,
   );
   $("menuHelp").onclick = () => {
     $("dialog").close();
@@ -2361,4 +2482,63 @@ $("accountMenu").onclick = () => {
     $("dialog").close();
     $("logout").click();
   };
+};
+
+$("sortWatch").onclick = () => {
+  const rank = state.display_order || [];
+  const order = [...state.watchlist].sort(
+    (a, b) =>
+      (rank.includes(a.id) ? rank.indexOf(a.id) : 999) -
+      (rank.includes(b.id) ? rank.indexOf(b.id) : 999),
+  );
+  modal(
+    "监测列表排序",
+    '<p class="muted">拖动条目或使用上下按钮。只改变展示顺序。</p><div id="watchOrderRows"></div><div class="dialog-footer"><button id="saveOrder" class="primary">保存排序</button></div>',
+  );
+  let dragging = null;
+  function draw() {
+    $("watchOrderRows").innerHTML = order
+      .map(
+        (i, n) =>
+          `<div class="order-row" draggable="true" data-order="${n}"><span aria-hidden="true">⠿</span><strong>${esc(i.label)}<small>${exchangeName[i.exchange]} · ${esc(i.symbol)}</small></strong><button type="button" data-move="-1" aria-label="上移 ${esc(i.label)}" ${n === 0 ? "disabled" : ""}>↑</button><button type="button" data-move="1" aria-label="下移 ${esc(i.label)}" ${n === order.length - 1 ? "disabled" : ""}>↓</button></div>`,
+      )
+      .join("");
+    $("watchOrderRows")
+      .querySelectorAll("[data-order]")
+      .forEach((row) => {
+        const n = Number(row.dataset.order);
+        row.ondragstart = () => {
+          dragging = n;
+        };
+        row.ondragover = (e) => e.preventDefault();
+        row.ondrop = (e) => {
+          e.preventDefault();
+          if (dragging !== null) {
+            order.splice(n, 0, order.splice(dragging, 1)[0]);
+            dragging = null;
+            draw();
+          }
+        };
+        row.querySelectorAll("[data-move]").forEach(
+          (b) =>
+            (b.onclick = () => {
+              const to = n + Number(b.dataset.move);
+              [order[n], order[to]] = [order[to], order[n]];
+              draw();
+            }),
+        );
+      });
+  }
+  draw();
+  $("saveOrder").onclick = () =>
+    action(async () => {
+      await api(
+        "/api/v2/display-order",
+        { ids: order.map((i) => i.id) },
+        "PUT",
+      );
+      $("dialog").close();
+      await refresh();
+      toast("显示顺序已保存");
+    });
 };

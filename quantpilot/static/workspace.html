@@ -11,7 +11,12 @@
     <script src="/static/notifications.js" defer></script>
   </head>
   <body>
-    <section id="login" class="login-wrap">
+    <section id="sessionLoading" class="session-loading" role="status">
+      正在恢复工作区…<button id="retrySession" class="secondary" hidden>
+        重试连接
+      </button>
+    </section>
+    <section id="login" class="login-wrap" hidden>
       <div class="login-story">
         <a class="brand"><span class="brand-mark">Q</span> QuantPilot</a>
         <div>
@@ -70,13 +75,7 @@
           <button class="nav" data-page="admin"><span>⚙</span>设置</button>
         </nav>
         <div class="sidebar-bottom">
-          <div class="guide">
-            <span>◈</span><b>先理解，再执行</b>
-            <p>评分是规则评估，不是盈利概率。你始终可以暂停新的交易。</p>
-            <button id="help" class="text-button">查看使用指南 ↗</button>
-          </div>
-          <a href="/legacy" class="legacy">旧版模拟账本 ↗</a
-          ><button id="logout" class="text-button">退出登录</button
+          <button id="logout" class="text-button">退出登录</button
           ><small>QUANTPILOT 0.13</small>
         </div>
       </aside>
@@ -157,7 +156,8 @@
                 <b>我的监测列表</b
                 ><span class="muted small"> USDT / 币本位永续</span>
               </div>
-              <button id="editWatch" class="text-button">管理交易对 ＋</button>
+              <button id="sortWatch" class="text-button">调整排序 ↕</button
+              ><button id="editWatch" class="text-button">管理交易对 ＋</button>
             </div>
             <div id="watchTiles" class="watch-tiles"></div>
             <div class="market-grid">
@@ -1072,6 +1072,7 @@
             </article>
           </section>
           <section data-panel="admin" hidden class="management-page">
+            <button id="help" class="text-button">使用帮助 ↗</button>
             <article class="card management-card notification-card">
               <p class="eyebrow">NOTIFICATIONS</p>
               <h2>交易与机会提醒</h2>
@@ -1093,6 +1094,8 @@
                 <div class="form-grid sound-controls">
                   <label
                     >提示音<select name="sound_tone">
+                      <option value="custom_y1462">自定义提醒 · y1462</option>
+                      <option value="warm">柔和长铃 · 新</option>
                       <option value="chime">清亮和弦</option>
                       <option value="bell">铃声</option>
                       <option value="pulse">节奏提示</option>
@@ -1221,7 +1224,7 @@
                 <div id="systemInfo" class="system-info"></div>
                 <p class="fine">
                   更新来源固定为你自己的 QuantPilot
-                  仓库开发分支。安装前自动备份，启动检查失败时回退程序版本；更新后自动交易保持暂停。
+                  仓库 main 主分支。安装前自动备份，启动检查失败时回退程序版本；更新后自动交易保持暂停。
                 </p>
                 <div class="form-actions">
                   <button class="secondary" id="checkUpdate">检查更新</button

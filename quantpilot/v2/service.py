@@ -25,8 +25,17 @@ from .limits import contract_limits
 from .logic import LogicEngine
 from .market import FuturesMarket
 from .market_streams import MarketStreams
-from .models import Account, Preferences, defaults, pair_enabled, policy_matches, signal_policy
+from .models import (
+    Account,
+    Preferences,
+    account_revision,
+    defaults,
+    pair_enabled,
+    policy_matches,
+    signal_policy,
+)
 from .notifications import Notifications, emit, opportunity_message
+from .position_automation import loss_add_ready
 from .position_review import PositionReviews
 from .research import ResearchEngine
 from .rules import effective
@@ -70,6 +79,7 @@ class Workspace:
                 "v2_archived_accounts": {},
                 "v2_sizing_migration": {},
                 "v2_entry_status": {},
+                "v2_display_order": [],
             }
             for key, value in initial.items():
                 db.execute("INSERT OR IGNORE INTO kv VALUES (?,?)", (key, json.dumps(value)))
@@ -228,13 +238,21 @@ class Workspace:
             self.last_evaluation = 0
         return items
 
-    def save_account(self, account):
+    def save_display_order(self, ids):
+        with self.store.transaction() as db:
+            current = [i["id"] for i in self.store.read(db, "v2_watchlist")]
+            if len(ids) != len(set(ids)) or set(ids) != set(current):
+                raise ValueError("监测列表已变化，请刷新后重新排序")
+            self.store.write(db, "v2_display_order", ids)
+        return ids
+
+    def save_account(self, account, expected_revision=None):
         with self.exchange.guard:
             guard = self.exchange.locks.setdefault(account.get("id", ""), threading.RLock())
         with guard:
-            return self._save_account(account)
+            return self._save_account(account, expected_revision)
 
-    def _save_account(self, account):
+    def _save_account(self, account, expected_revision=None):
         account = Account.model_validate(account).model_dump()
         account["id"] = account["id"] or secrets.token_hex(8)
         prefs = self.store.get("v2_preferences")
@@ -248,6 +266,8 @@ class Workspace:
         with self.store.transaction() as db:
             accounts = self.store.read(db, "v2_accounts")
             old = accounts.get(account["id"])
+            if expected_revision is not None and (not old or account_revision(old) != expected_revision):
+                raise ValueError("账户设置已被其他操作修改，请重新打开设置后保存")
             if account["id"] in self.store.read(db, "v2_archived_accounts"):
                 raise ValueError("账户已删除，请新建账户")
             if len(accounts) >= 20 and not old:
@@ -428,10 +448,6 @@ class Workspace:
                     account["auto"] = False
                 self.store.write(db, "v2_accounts", accounts)
             self.store.write(db, "kill", prefs["halted"])
-            if prefs["halted"]:
-                strategy = self.store.read(db, "strategy")
-                strategy["enabled"] = False
-                self.store.write(db, "strategy", strategy)
             if prefs["halted"]:
                 accounts = self.store.read(db, "v2_accounts")
                 for account in accounts.values():
@@ -755,16 +771,18 @@ class Workspace:
                             if adding:
                                 sign = 1 if position["side"] == "long" else -1
                                 trigger = self.position_reviews.points(account, key, position)["add_at"]
-                                if trigger is None:
-                                    continue
-                                if (quotes[key]["mid"] - trigger) * sign < 0:
+                                loss_ready = loss_add_ready(account, key, position, quotes.get(key), op)
+                                if not loss_ready and (
+                                    trigger is None or (quotes[key]["mid"] - trigger) * sign < 0
+                                ):
                                     continue
                             result = self.paper.enter(account, op, quotes, items, prefs["profile"], adding)
                         else:
                             held = self.position_reviews.held(account).get(key)
                             if held:
                                 trigger = self.position_reviews.points(account, key, held)["add_at"]
-                                if trigger is None:
+                                loss_ready = loss_add_ready(account, key, held, quotes.get(key), op)
+                                if trigger is None and not loss_ready:
                                     continue
                                 op = {**op, "position_add_at": trigger}
                             result = self.exchange.enter(account, op, quotes, items, prefs["profile"])
@@ -866,6 +884,7 @@ class Workspace:
             accounts.append(
                 {
                     **a,
+                    "revision": account_revision(a),
                     "summary": summary,
                     "execution": self.exchange.availability(a),
                     "credential_saved": bool(self.vault.get("v2:account:" + a["id"])),
@@ -888,10 +907,11 @@ class Workspace:
         return {
             "history_scope": self.logic.history_scope(),
             "position_changes": changes,
-            "version": "0.13.1",
+            "version": "0.14.0",
             "now": now,
             "demo": self.market.demo,
             "watchlist": self.store.get("v2_watchlist"),
+            "display_order": self.store.get("v2_display_order"),
             "preferences": prefs,
             "quotes": quotes,
             "opportunities": ops,

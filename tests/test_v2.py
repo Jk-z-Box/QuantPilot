@@ -26,13 +26,13 @@ def test_v2_requires_session(client, path):
     assert client.get("/api/v2/" + path).status_code == 401
 
 
-def test_v2_defaults_and_legacy_survive(logged):
+def test_v2_defaults_and_legacy_removed(logged):
     s = logged.get("/api/v2/state").json()
     assert [i["label"] for i in s["watchlist"]] == ["BTC", "ETH", "SOL", "AVGO", "SOXL"]
     assert all(i["exchange"] == "binance" and i["symbol"].endswith(":USDT") for i in s["watchlist"])
     assert s["accounts"][0]["summary"]["equity"] == "10000"
-    assert logged.get("/api/state").status_code == 200
-    assert logged.get("/legacy").status_code == 200
+    assert logged.get("/api/state").status_code == 404
+    assert logged.get("/legacy").status_code == 404
     assert "/static/workspace.js" in logged.get("/").text
 
 
@@ -748,10 +748,9 @@ def test_legacy_kill_also_pauses_v2(workspace, account):
     assert not workspace.store.get("v2_accounts")[account["id"]]["auto"]
 
 
-def test_v2_halt_also_pauses_legacy(workspace):
+def test_v2_halt_sets_shared_kill(workspace):
     workspace.preferences(Preferences(halted=True).model_dump())
     assert workspace.store.get("kill") is True
-    assert workspace.store.get("strategy")["enabled"] is False
 
 
 def test_ai_response_for_replaced_signal_is_discarded(workspace, opportunity, monkeypatch):
@@ -873,7 +872,7 @@ def test_live_receipt_is_bound_expiring_private_and_blockable(workspace, monkeyp
     workspace.vault.put("v2:account:" + a["id"], secret)
     monkeypatch.setenv("QP_LIVE_EXECUTION", "1")
     cert = {
-        "version": "0.13.1",
+        "version": "0.14.0",
         "settle": "USDT",
         "exchange": "binance",
         "credential_fingerprint": hashlib.sha256(json.dumps(secret, sort_keys=True).encode()).hexdigest(),

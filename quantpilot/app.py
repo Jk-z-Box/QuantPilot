@@ -7,7 +7,6 @@ import secrets
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Literal
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -18,13 +17,9 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .admin_api import install as install_admin
-from .advisor import advise
-from .config import EXCHANGES, Settings, config_path, load_settings, update_settings, verify_password
-from .engine import Engine, OrderRequest
-from .market import TIMEFRAMES, Market, MarketError, decimal
-from .runner import Runner
+from .config import Settings, config_path, load_settings, verify_password
+from .market import MarketError
 from .store import Store, Vault
-from .strategy import analyze
 from .v2.api import install as install_v2
 from .v2.service import Workspace
 
@@ -38,29 +33,8 @@ class Login(StrictModel):
     password: SecretStr = Field(max_length=256)
 
 
-class Credentials(StrictModel):
-    api_key: SecretStr = Field(min_length=1, max_length=512)
-    secret: SecretStr = Field(default=SecretStr(""), max_length=512)
-    passphrase: SecretStr = Field(default=SecretStr(""), max_length=512)
-
-
 class Switch(StrictModel):
     enabled: bool
-
-
-class AIConfig(StrictModel):
-    enabled: bool
-    model: str = Field(max_length=100, pattern=r"^[a-zA-Z0-9_.:-]*$")
-
-
-class StrategyConfig(StrictModel):
-    enabled: bool = False
-    exchange: Literal["binance", "okx", "bybit", "kraken", "coinbase"] = "okx"
-    symbol: str = "BTC/USDT"
-    timeframe: Literal["5m", "15m", "1h", "4h", "1d"] = "1h"
-    budget: str = Field(default="100", max_length=20)
-    stop_pct: str = Field(default="0.02", max_length=20)
-    take_pct: str = Field(default="0.04", max_length=20)
 
 
 def digest(token):
@@ -71,9 +45,9 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
     settings = settings or load_settings()
     store = Store(directory or config_path().parent, settings.initial_cash)
     vault = Vault(store)
-    market = market or Market(settings, vault)
-    engine = Engine(settings, store, market)
-    runner = Runner(engine)
+    from .retired import retire_console
+
+    retire_console(store)
     workspace = Workspace(store, vault, settings)
 
     @asynccontextmanager
@@ -86,18 +60,19 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
             raise RuntimeError("Only one QuantPilot server process is allowed") from None
         try:
             if background:
-                runner.start()
                 workspace.start()
             yield
         finally:
             workspace.stop()
-            runner.stop()
             lock.close()
 
     app = FastAPI(title="QuantPilot", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
-    app.state.engine, app.state.store, app.state.vault, app.state.runner = engine, store, vault, runner
+    app.state.store, app.state.vault = store, vault
     app.state.workspace = workspace
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=[urlsplit(settings.public_origin).hostname, "127.0.0.1", "localhost"])
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=[urlsplit(settings.public_origin).hostname, "127.0.0.1", "localhost"],
+    )
 
     @app.middleware("http")
     async def security(request: Request, call_next):
@@ -116,9 +91,19 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
             if request.headers.get("content-type", "").split(";")[0] != "application/json":
                 return JSONResponse({"detail": "json_required"}, status_code=415)
         response = await call_next(request)
-        response.headers.update({"Cache-Control": "no-store, no-transform" if request.url.path in ("/api/v2/account-events", "/api/v2/realtime-events") else "no-store", "X-Content-Type-Options": "nosniff",
-            "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer",
-            "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' " + settings.public_origin.replace("https://", "wss://").replace("http://", "ws://") + "; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"})
+        response.headers.update(
+            {
+                "Cache-Control": "no-store, no-transform"
+                if request.url.path in ("/api/v2/account-events", "/api/v2/realtime-events")
+                else "no-store",
+                "X-Content-Type-Options": "nosniff",
+                "X-Frame-Options": "DENY",
+                "Referrer-Policy": "no-referrer",
+                "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' "
+                + settings.public_origin.replace("https://", "wss://").replace("http://", "ws://")
+                + "; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+            }
+        )
         if settings.secure_cookie:
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
         return response
@@ -152,7 +137,7 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
 
     @app.get("/healthz")
     def health():
-        return {"status": "ok", "version": "0.13.1", "mode": "paper-first"}
+        return {"status": "ok", "version": "0.14.0", "mode": "paper-first"}
 
     @app.post("/api/login")
     def login(body: Login, request: Request, response: Response):
@@ -174,13 +159,24 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
         token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         with store.transaction() as db:
             db.execute("DELETE FROM sessions WHERE expires <= ?", (now,))
-            db.execute("INSERT INTO sessions VALUES (?,?,?)", (digest(token + auth.password_hash), csrf, now + 28800))
-            db.execute("DELETE FROM sessions WHERE token NOT IN (SELECT token FROM sessions ORDER BY expires DESC LIMIT 20)")
+            db.execute(
+                "INSERT INTO sessions VALUES (?,?,?)", (digest(token + auth.password_hash), csrf, now + 28800)
+            )
+            db.execute(
+                "DELETE FROM sessions WHERE token NOT IN (SELECT token FROM sessions ORDER BY expires DESC LIMIT 20)"
+            )
             # Keep successful login churn bounded; sessions are not counted as failed attempts.
             db.execute("DELETE FROM attempts WHERE peer=?", (peer,))
             store.audit(db, "login", {})
-        response.set_cookie("qp_session", token, max_age=28800, secure=settings.secure_cookie,
-                            httponly=True, samesite="strict", path="/")
+        response.set_cookie(
+            "qp_session",
+            token,
+            max_age=28800,
+            secure=settings.secure_cookie,
+            httponly=True,
+            samesite="strict",
+            path="/",
+        )
         return {"csrf": csrf, "username": auth.username}
 
     @app.get("/api/session")
@@ -190,33 +186,14 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
     @app.post("/api/logout", dependencies=[Depends(mutation)])
     def logout(request: Request, response: Response):
         with store.transaction() as db:
-            db.execute("DELETE FROM sessions WHERE token=?", (digest(request.cookies.get("qp_session", "") + auth_settings().password_hash),))
-        response.delete_cookie("qp_session", path="/", secure=settings.secure_cookie, httponly=True, samesite="strict")
+            db.execute(
+                "DELETE FROM sessions WHERE token=?",
+                (digest(request.cookies.get("qp_session", "") + auth_settings().password_hash),),
+            )
+        response.delete_cookie(
+            "qp_session", path="/", secure=settings.secure_cookie, httponly=True, samesite="strict"
+        )
         return {"ok": True}
-
-    @app.get("/api/state", dependencies=[Depends(session)])
-    def state():
-        return {"mode": "paper", "live_available": False, "live_lock_reason": "Release has no real-order transport",
-            "market_mode": settings.market_mode, "initial_cash": settings.initial_cash,
-            "kill_switch": store.get("kill"), "account": engine.snapshot(),
-            "strategy": store.get("strategy"), "exchanges": EXCHANGES, "symbols": settings.symbols,
-            "credentials": vault.names(), "openai_enabled": settings.openai_enabled, "openai_model": settings.openai_model,
-            "limits": {name: getattr(settings, name) for name in ("max_order", "max_exposure", "max_position", "daily_loss_limit", "max_trade_loss", "fee_bps", "slippage_bps", "max_quote_age")},
-            "runner_error": runner.last_error}
-
-    @app.get("/api/market", dependencies=[Depends(session)])
-    def market_data(exchange: str = "okx", symbol: str = "BTC/USDT", timeframe: str = "1h"):
-        quote = market.quote(exchange, symbol)
-        rows = market.candles(exchange, symbol, timeframe)
-        return {"quote": quote.public(), "candles": rows, "signal": analyze(rows, TIMEFRAMES[timeframe])}
-
-    @app.post("/api/orders", dependencies=[Depends(mutation)])
-    def order(body: OrderRequest):
-        return engine.execute(body)
-
-    @app.get("/api/orders", dependencies=[Depends(session)])
-    def orders():
-        return [json.loads(row["result"]) for row in store.recent("orders")]
 
     @app.get("/api/audit", dependencies=[Depends(session)])
     def audit():
@@ -227,74 +204,6 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
         store.set_kill(body.enabled)
         return {"enabled": body.enabled}
 
-    @app.post("/api/strategy", dependencies=[Depends(mutation)])
-    def strategy(body: StrategyConfig):
-        market.check(body.exchange, body.symbol)
-        budget, stop, take = decimal(body.budget), decimal(body.stop_pct), decimal(body.take_pct)
-        if not 5 <= budget <= decimal(settings.max_order) or not decimal(".001") <= stop <= decimal(".1") or not decimal(".001") <= take <= decimal(".5"):
-            raise HTTPException(422, "invalid_strategy_limits")
-        with store.transaction() as db:
-            if body.enabled and store.read(db, "kill"):
-                raise HTTPException(409, "kill_switch_active")
-            config = {**body.model_dump(), "revision": secrets.token_hex(16)}
-            store.write(db, "strategy", config)
-            store.audit(db, "strategy_configured", {"enabled": body.enabled, "exchange": body.exchange, "symbol": body.symbol})
-        return config
-
-    @app.post("/api/credentials/{name}", dependencies=[Depends(mutation)])
-    def save_credentials(name: str, body: Credentials):
-        if name not in (*EXCHANGES, "openai"):
-            raise HTTPException(404, "unknown_provider")
-        credentials = {"apiKey": body.api_key.get_secret_value()}
-        if name != "openai":
-            if not body.secret.get_secret_value():
-                raise HTTPException(422, "secret_required")
-            credentials["secret"] = body.secret.get_secret_value()
-            if body.passphrase.get_secret_value():
-                credentials["password"] = body.passphrase.get_secret_value()
-        vault.put(name, credentials)
-        return {"saved": True}
-
-    @app.delete("/api/credentials/{name}", dependencies=[Depends(mutation)])
-    def delete_credentials(name: str):
-        if name not in (*EXCHANGES, "openai"):
-            raise HTTPException(404, "unknown_provider")
-        vault.delete(name)
-        return {"deleted": True}
-
-    @app.get("/api/balance/{exchange}", dependencies=[Depends(session)])
-    def balance(exchange: str):
-        return {"exchange": exchange, "read_only": True, "balances": market.balance(exchange)}
-
-    @app.post("/api/advice", dependencies=[Depends(mutation)])
-    def advice():
-        if not settings.openai_enabled or not settings.openai_model:
-            raise HTTPException(503, "openai_disabled_or_model_missing")
-        # One AI request per minute, even when the vendor fails, bounds accidental spending.
-        with store.transaction() as db:
-            row = db.execute("SELECT value FROM kv WHERE key='last_advice'").fetchone()
-            if row and time.time() - float(row[0]) < 60:
-                raise HTTPException(429, "advice_rate_limited")
-            store.write(db, "last_advice", time.time())
-        try:
-            config = store.get("strategy")
-            signal = analyze(market.candles(config["exchange"], config["symbol"], config["timeframe"]), TIMEFRAMES[config["timeframe"]])
-            result = advise(settings, vault, engine.snapshot(), signal)
-        except ValueError as exc:
-            raise HTTPException(503, str(exc)) from None
-        store.record("ai_advice", {"assessment": result["assessment"]})
-        return result
-
-    @app.post("/api/ai/settings", dependencies=[Depends(mutation)])
-    def ai_settings(body: AIConfig):
-        if body.enabled and not body.model:
-            raise HTTPException(422, "model_required")
-        path = store.directory / "config.json"
-        update_settings(path, {"openai_enabled": body.enabled, "openai_model": body.model}, settings)
-        settings.openai_enabled, settings.openai_model = body.enabled, body.model
-        store.record("ai_settings", {"enabled": body.enabled, "model": body.model})
-        return {"enabled": body.enabled, "model": body.model}
-
     install_v2(app, workspace, session, mutation)
     install_admin(app, store, settings, auth_settings, session, mutation)
 
@@ -304,9 +213,5 @@ def create_app(settings: Settings | None = None, directory: Path | None = None, 
     @app.get("/")
     def index():
         return FileResponse(static / "workspace.html")
-
-    @app.get("/legacy")
-    def legacy():
-        return FileResponse(static / "index.html")
 
     return app

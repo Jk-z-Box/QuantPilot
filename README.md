@@ -1,162 +1,58 @@
-# QuantPilot 0.13.1
+# QuantPilot
 
-0.13.1 修复实时更新的高 CPU 开销，复用数据库连接与行情线程池、合并重复估值，并减少不需要的交易所目录占用。行情推送与风险保护频率保持不变。见 [性能修复说明](docs/V0131.md)。
+**A self-hosted, paper-first workspace for perpetual futures research and trade management.**
 
-0.13.0 新增币本位永续、交易所目录搜索、公共行情与网页 WebSocket，资金和仓位按结算币独立记账。支持断线恢复、SSE 降级及延迟与过期提示。使用方法和边界见 [0.13.0 说明](docs/V0130.md)。
+[繁體中文](README.zh-TW.md) · [Deployment](docs/DEPLOYMENT.md) · [0.14.0 changes](docs/V0140.md) · [Documentation](docs/README.md)
 
-0.12.0 统一参数启停语义，记录交易全过程及版本关联，补全 AI 复盘输入。优化通过参数检查后立即生效，账户可独立开启策略更新后的持仓重评。详见 [策略优化说明](docs/V0120.md)。
+QuantPilot brings market context, configurable strategies, separate account ledgers and optional AI review into one responsive web console. The current release is **0.14.0**, maintained on **main**. Live execution is disabled by default.
 
-0.11.1 将交易所私有余额和仓位事件直接推送到网页，按浏览器绘制帧显示，并提供分字段毫秒接收时间、时钟校准后的网页传输估算和页面处理耗时。完整资金缺失字段仍由交易所接口补读；不把显示精度当作交易所推送频率。见 [毫秒显示说明](docs/V0111.md)。
+## What you can do
 
-0.11.0 新增实盘账户 WebSocket 实时资金、订单与持仓订阅，变化直接推送到网页；暂停自动交易仍保持只读更新，支持断线重连与状态提示。修正 Gate 账户权益和浮动盈亏。见 [实时资金说明](docs/V0110.md)。
-
-0.10.0 新增账户独立交易前 AI 审核、同交易对共享行情审核、逐账户资金与强平风险上下文、分账户 Telegram 状态，以及三档系统仓位评估。操作细节见 [0.10.0 说明](docs/V0100.md)。
-
-
-0.9.0 新增：[审核周期、账户持仓评估、完整点位与声音设置](docs/V090.md)。
-
-0.7.0 功能：[手机布局、Telegram / 声音提醒、参考历史与逐动作 AI 审核](docs/V070.md)。策略编辑器覆盖指标、周期、权重、进出场及加减仓开关。真实交易继续默认关闭。
-
-中文多账户永续合约研究与模拟交易工作台。先观察市场、查看评分依据，再用独立模拟资金验证。默认不发送真实订单。
-
-## 打开后怎么用
-
-1. **市场与机会**：默认 BTC、ETH、SOL、AVGO、SOXL，使用 Binance USDT 永续合约名称。点品种切换 K 线，右侧选择周期；“管理交易对”可换成 OKX / Gate，或添加其他已上市合约。
-2. **看机会说明**：周线、日线、4 小时、1 小时共同评估，显示方向、开仓区间、止损、两档止盈及比例、含费用的收益风险比、加减仓观察价和有效期。达到顶部自定义有效分数（1–100，默认 80）并通过全部阻断检查才有效，评分不是胜率。
-3. **账户与仓位**：默认独立的 10,000 USDT 模拟账户。可新增/删除账户、重置模拟资金，逐交易对设置固定首次开仓币数量或最大总持仓币数量、独立杠杆及加仓比例。真实/测试账户不填写模拟资金。
-4. **数据与 AI**：公开行情、美联储、Deribit、Gate 清算统计无需密钥。新增公开 BTC ETF 汇总与新闻 RSS。CoinGlass / Finnhub / OpenAI 密钥可保存、更换、删除。模型支持 API 下拉列表和自定义填写；AI 默认关闭。
-5. **交易记录**：查看开仓、加仓、分批退出、未确认订单和操作记录。顶部“暂停开仓”停用全部自动交易，已有仓位保护继续。重启后自动交易需要重新启用。
-
-6. **量化逻辑**：查看规则和实际运行参数，手动修改、定期 AI 复盘及受限自动优化；每次修改先备份，支持存档导入、导出和恢复。
-7. **设置**：修改登录用户名/密码、检查并安装更新、调整配置 / 记录补读间隔；行情和账户使用实时推送。
-
-新版操作和统计口径详见 [量化逻辑与设置](docs/STRATEGY_SETTINGS.md)。
-
-旧版现货模拟账本保留在 `/legacy`，不迁移为合约资金，不与新账户混用；旧版说明见 [历史手册](docs/LEGACY-0.1.md)。
-
-## 已实现的能力与边界
-
-| 功能 | 本版行为 |
+| Area | Capabilities |
 |---|---|
-| 市场 | Binance / OKX / Gate 已上市 USDT 线性及币本位 USD 反向永续；搜索目录校验，暂不支持交割、quanto 或期权下单 |
-| 图表 | 5m / 15m / 1h / 4h / 1d / 1w，蜡烛、成交量、悬停详情、缩放；展示未收盘线，评分仅用完成线 |
-| 更新 | 交易所与服务器、服务器与网页均采用 WebSocket；行情与资金变化推送，网页按绘制帧合并更新；REST 补读与 SSE 降级；机会评估周期独立可调 |
-| 技术评分 | 默认 EMA20/50、RSI14，可在量化逻辑页编辑；MACD12/26/9、ATR14、波动率、多周期、量比和外部证据 |
-| 外部证据 | 来源、披露/查询时间、失效时间、覆盖范围和缺失状态；不把缺失证据按比例放大成满分 |
-| 模拟账户 | 独立账本、多空、保证金预留、费用滑点、部分退出、资金重置、持久化幂等 |
-| 仓位配置 | 固定币数量不足风险额度即拒绝；最大币数量为持仓总量上限，含后续加仓；加仓比例以初始成交币数量为基准 |
-| 交易所账户 | 隔离凭据、余额/仓位只读核对、逐账户同交易所品种授权；资金、已持仓、强平距离和未知订单检查 |
-| 执行组件 | 测试环境/实盘独立门槛；IOC 入场、确认成交量后放置原生只减仓止损及两档止盈；不确定结果锁定账户、不盲目重试 |
-| 动态保护 | 趋势反转/事件风险退出、机会失效一次性减半、分批止盈；AI 可受限减仓/退出/收紧止损及止盈，不能放宽风险 |
-| 系统 | 密码登录、会话/CSRF、加密凭据、审计、单进程、Linux 安装升级、CLI、Cloudflare 回源说明 |
+| Markets | Search and monitor listed Binance, OKX and Gate USDT linear or coin-margined inverse perpetuals. Settlement wallets remain separate. |
+| Charts and state | Exchange-to-server and server-to-browser WebSocket streams, candle history, reconnect status, timestamps, REST recovery and SSE fallback. Millisecond timestamps do not promise millisecond exchange updates. |
+| Opportunities | Completed weekly, daily, 4-hour and hourly candles; EMA, RSI, MACD, ATR, volume, volatility, funding, OI and sourced market context. Configurable score threshold, expiry and parameter switches. |
+| Accounts | Independent paper, exchange test and live account configurations; per-pair quantity, leverage, isolated/cross margin, system sizing and addition budgets. |
+| Protection | Stops, staged targets, optional loss-addition evaluation and durable trailing take profit. Increasing exposure still requires fresh evidence, authorization and deterministic risk checks. |
+| Optional AI | OpenAI API or server-side Codex login; opportunity review, account-specific pre-trade risk review, position review, sourced research and strategy retrospectives. AI cannot bypass execution gates. |
+| Operations | Telegram categories, browser sounds and volume, strategy export/import/retention, audit history, Linux installer, CLI and web updates. |
 
-**本版没有完成交易所测试网及实盘认证。** 私有 API、不同账户模式和原生保护单必须逐交易所联调；本地替身测试不能证明交易所实盘可用。生产默认关闭 `QP_LIVE_EXECUTION` 和 `QP_DEMO_EXECUTION`，网页不能解除服务端门槛。详见 [执行验收](docs/ACCEPTANCE.md)。
+Default watch labels are BTC, ETH, SOL, AVGO and SOXL. An exchange must actually list a requested contract; an unavailable symbol stays unavailable. The simulator does not replicate every exchange's fee tiers, maintenance tiers or matching engine.
 
-模拟账户的“模拟交易所”用于核验合约杠杆上限，使用所选监测品种的市场价格；账本使用统一费用/滑点/强平估算模型，不声称精确复制各交易所的撮合、手续费等级或保证金档位。没有历史回测、多人权限、跨进程扩容和全市场新闻覆盖。
+## Get started
 
-## 数据来源
+Use Linux with systemd, Python 3.11+, `python3-venv`, curl and tar. The command resolves **main** to a full commit once, then installs that exact source. Choose the port and username when prompted; enter the password only in the terminal prompt.
 
-- **行情**：所选交易所自己的盘口、K 线、资金费率与 OI。行情不可达时显示缺失，不暗中切换交易所或合成价格。
-- **期权**：Deribit 最近到期期权 OI、交割窗口及按 OI 估算的最大痛点。最大痛点是统计估算，不是目标价；没有股票期权公开源时保持缺失。
-- **宏观**：美联储官方 FOMC 日历和公告；日历日期按通常 14:00 ET 转换，仅作风险窗口。公司新闻优先 Broadcom 官方 RSS（AVGO），不可用时读取 Google News 公开标题与原文链接；不将新闻索引视为已核实事实，也不据此推算财报日历。Finnhub 连接可补充公司财报和新闻；不声称实时覆盖所有突发事件。
-- **清算**：默认 Gate 对应合约的公开历史清算统计，清楚标注单市场范围；CoinGlass 可提供聚合清算和热力图。热力图是供应商模型，不能当作实际成交或确定清算价。
-- **ETF**：BTC 默认读取 [The Commoner Bitcoin ETF Tracker / TFTC](https://www.tftc.io/bitcoin-etf-flows) 的公开 JSON（CC BY 4.0，保留署名与方法说明），核对分基金合计与总额，超过 4 天不计分；不把查询时刻充作披露时刻。ETH / SOL 暂无已验证的免费接入。公开来源不足时不编造。可人工导入已核验披露并保存链接/时间，也可配置 CoinGlass 获取已披露交易日净流量；它不是盘中即时资金流。权限和币种覆盖由供应商决定。
-- **AI**：可选 OpenAI Responses API。启用会发送公共指标、事件摘要、匿名化账户资金与持仓数据，并产生 API 费用；不发送密钥和账户名称。严格校验结构，评分上调最多 5 分且不超过数据覆盖度，下调最多 30 分，只能缩短时效、收紧保护，仍须通过确定性风控。
+```bash
+QP_REF=$(curl --proto '=https' --tlsv1.2 -fsSL https://api.github.com/repos/Jk-z-Box/QuantPilot/commits/main | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])') && curl --proto '=https' --tlsv1.2 -fsSL "https://raw.githubusercontent.com/Jk-z-Box/QuantPilot/$QP_REF/install.sh" -o /tmp/quantpilot-install.sh && sudo bash /tmp/quantpilot-install.sh --ref "$QP_REF"
+```
 
-默认五个名称不保证每个合约已上市、可在当前地区访问或已有 60 根周 K。新上市合约历史不足会阻止交易。公开数据不足以达到你设置的有效分数时，等待是正常行为；系统不会自动降低门槛。降低分数也不能绕过行情时效、成交量、收益风险比和账户风控。
+For an existing installation, append `--upgrade`. For domain access and Cloudflare Origin Rules, follow [Deployment](docs/DEPLOYMENT.md) before exposing the console. Public installation requires no GitHub token.
 
-## 风险偏好
+1. **Markets** — select a symbol and timeframe, inspect score components and missing evidence; use “调整排序” to arrange monitor tiles.
+2. **Accounts** — start with a paper account. Enable only intended pairs, configure sizing, then explicitly enable automation.
+3. **Data & AI** — choose optional connections and model; enable only the reviews you want. A ChatGPT subscription and API billing are separate.
+4. **Strategy** — edit active rules, inspect execution evidence and review history. Every change creates a backup; disabled parameters are excluded, not reset to defaults.
+5. **Settings** — manage sign-in, notifications, volume and updates. Refresh restores the current page, instrument and timeframe in that tab.
 
-| 参数 | 保守 | 平衡（默认） | 激进 |
-|---|---:|---:|---:|
-| 单笔止损风险预算 / 权益 | 0.3% | 0.6% | 1% |
-| 总名义敞口 / 权益 | 30% | 60% | 90% |
-| 杠杆 | 按交易对独立设置 | 按交易对独立设置 | 按交易对独立设置 |
-| 信号最长有效期 | 120 秒 | 180 秒 | 240 秒 |
-| 最低含费用收益风险比 | 2.0 | 1.8 | 1.6 |
-| 自动加仓次数上限 | 1 | 2 | 3 |
+## Evidence and execution boundaries
 
-每组相关资产敞口最多占组合敞口限额 75%；当前按加密/股票 ETF 分组保守限制，尚不是滚动相关系数模型。组合止损风险最多 3 倍单笔预算，UTC 日损失达到 5 倍单笔预算阻止新增风险。默认两档止盈为 1.5R / 3R，各 50%。默认模拟手续费每边 5 bps、滑点 2 bps；资金费率按 8 小时近似，逐仓 / 全仓按每个交易对选择，模拟强平价采用统一维持保证金率 0.5% + 平仓费 0.05% 估算，全仓价格会随共享资金和其他全仓仓位变化（详见 [保证金模式](docs/MARGIN_MODES.md)）。跳空和停机仍可能超过计划损失。
+Public adapters include exchange data, Deribit, Federal Reserve announcements, ETF disclosure tables, news indexes and [Alternative.me's Bitcoin Fear & Greed Index](https://alternative.me/crypto/fear-and-greed-index/). Each observation carries its source, publication time, scope and freshness. Fear & Greed is a daily **BTC market proxy**, not a dedicated ETH/SOL/equity index. It is opt-in for scoring. Missing data is never invented or silently replaced by an AI estimate.
 
-## 0.2.2 自定义门槛与 AI 数据补全
+**Local tests are not exchange certification.** Real orders require server execution gates and a private, current, credential-bound certification covering native protection, partial fills, reconnects and margin modes. Unknown order results freeze further exposure. See [execution acceptance](docs/ACCEPTANCE.md). Existing protective exits continue when AI is unavailable; entries and additions requiring AI wait.
 
-- 顶部风险偏好、有效分数和暂停开仓统一对齐。输入 1–100 的整数并点击“应用”，保存后旧机会失效并重新评估；AI 复核、模拟盘和交易所执行均使用该门槛。加仓还须达到门槛加 5 分（封顶 100），仍需满足其他加仓保护。
-- “数据与 AI → 数据来源 → AI 补全缺失数据”提供独立开关。先保存 OpenAI Key 与支持联网搜索的模型，再保存补全设置。默认关闭；与风险复核开关独立，共用密钥及模型。可选 15 分钟、30 分钟、1 小时或每天检索，也可手动触发（至少间隔 5 分钟）。每轮最多 3 个品种、4 次搜索工具调用，会产生 OpenAI API 和搜索费用。
-- 只向该检索请求发送公共交易对标识及缺失类别，不发送账户资金、仓位或交易所凭据。使用 Responses 的 `web_search`，限定官方机构、交易所和已列明公开数据域名。模型不支持该工具或访问失败时显示失败原因，不改用模型记忆补数据。
-- 对 ETF、期权、清算量、宏观公告的缺项检索；有效原生来源优先。搜索返回的 URL 还需独立 HTTPS 访问核对引用、对应资产、实际数值与邻近日期，过期、预测、未引用链接、无法读取的页面均不作为新证据。ETF 最长 4 天，期权/清算需 2 小时内带时区时间，宏观公告最长 2 天；检索结果缓存最多 30 分钟。
-- 页面展示原文引用、来源链接、披露时间和核对范围。引用与日期匹配不能证明上下文完整，因此补全只计中性覆盖分，不推导多空方向。无法补造实时行情、K 线或全市场清算热力图；无可靠来源仍显示缺失。关闭补全、更换密钥/模型、重启会清除补全缓存；配置变化后的旧机会不得继续开仓。
+Trailing take profit runs on the server; it is not an exchange-hosted trailing order. Confirmed native stops remain in place if server connectivity fails. Stops and trailing exits can slip or gap and cannot guarantee profit.
 
-## 0.2.1 账户设置与升级
-
-- 每个品种分别填写币数量与杠杆。固定指初次开仓数量；最大指包含加仓后的总持仓上限。API 交易会把币数量转换为合约张数，固定模式不符合数量步长时拒绝下单。
-- “25, 20”表示两次分别加初始成交数量的 25% / 20%。初始 0.01 BTC 时，对应 0.0025 / 0.002 BTC。次数/比例全部留空由系统评估；只填次数时每次默认上限 25%；次数 0 禁止加仓。仍须满足盈利、评分与风险额度条件。
-- 杠杆按所选交易所合约上限校验。币安通常需账户 API 读取档位；无法核验时只允许 1 倍。实际下单还核验当前持仓档位；风险预算、强平距离可能阻止使用高杠杆。持仓期间不允许改变该品种杠杆。
-- 升级时旧金额设置被存档，数量留空且自动交易暂停，需重新填写币数量。旧持仓保持原数据；缺少初始币数量的旧仓位禁止自动加仓，原有保护继续。
-- 删除账户需先暂停并处理平台持仓/不确定订单；加密密钥同步删除，历史记录和账本归档保留。删除连接不会平掉外部仓位。数据库备份仍可能包含旧密钥的加密副本。
-- 删除 OpenAI Key 会关闭 AI 复核/干预/数据补全、清理缓存及使当前机会等待重新评估。模型列表只表示 API 可见，不保证每个模型支持 Responses 结构化输出；可自定义填写。
-
-## 本地启动
-
-需要 Python 3.11–3.13。
+## Development
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --require-hashes -r requirements.lock
-python -m pip install --no-deps --no-build-isolation -e .
-qp init --username admin --port 8080
-qp serve
+.venv/bin/pip install --require-hashes -r requirements.lock
+.venv/bin/pip install --require-hashes -r requirements-dev.lock
+.venv/bin/pip install --no-deps --no-build-isolation -e .
+.venv/bin/pytest
+.venv/bin/ruff check .
 ```
 
-打开 `http://127.0.0.1:8080`。账号/端口可自定义，密码至少 12 位、在终端隐藏输入。公共行情不需要交易所密钥。离线演示必须单独设置 `QP_CONFIG` 路径并在初始化时明确加 `--demo`；界面始终标记合成数据。
-
-## Linux 与域名
-
-```bash
-sudo bash scripts/install.sh --port 8080 --username admin
-sudo bash scripts/install.sh --upgrade
-sudo qp                  # 快捷菜单
-sudo qp status           # 含新工作区及账户状态
-sudo qp kill on          # 同时暂停新旧工作区开仓
-sudo qp kill off         # 解除暂停；不会重新开启自动交易
-sudo qp password         # 更新密码并撤销会话
-sudo qp backup           # 数据库一致性备份
-sudo qp doctor
-```
-
-`qp start / stop / restart / logs` 管理服务。多账户密钥在网页设置，旧 `qp credential` 仅管理旧版连接。升级保留配置、密钥与旧账本。
-
-Cloudflare 路径必须为浏览器 HTTPS → Cloudflare → 回源端口的 **HTTPS** 服务 → 本机应用。Origin Rules 改端口不会转换 HTTP/HTTPS。部署、备份和一键命令结构见 [部署手册](docs/DEPLOYMENT.md)。
-
-## 验证与维护
-
-```bash
-python -m pip install --require-hashes -r requirements.lock -r requirements-dev.lock
-bash scripts/check.sh
-```
-
-测试结果、实际外部探测和未验证项见 [验收记录](docs/TEST_REPORT.md)，后续工作见 [交接任务](CODEX_TASKS.md)。当前项目为按需求独立建立的实现；最早的 `/mnt/data/quantpilot-starter.zip` 在此环境不可访问，未声称导入或审查过该压缩包。
-
-官方接口依据：[Gate](https://www.gate.com/docs/developers/apiv4/en/futures/)、[OKX](https://www.okx.com/docs-v5/en/)、[Binance](https://developers.binance.com/docs/derivatives/usds-margined-futures/general-info)、[Deribit](https://docs.deribit.com/api-reference/market-data/public-get_book_summary_by_currency)、[美联储](https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm)、[CoinGlass](https://docs.coinglass.com/reference/etf-flows-history)、[OpenAI](https://developers.openai.com/api/docs/guides/structured-outputs)。
-
-## 0.3.0 官方登录与明确的 AI 错误
-
-“数据与 AI”支持 API Key 和 **OpenAI 官方登录授权（Continue with ChatGPT）**。官方连接使用获准共享的 ChatGPT 计划，API Key 仍独立计费；两者不会自动回退。服务器部署需先在浏览器所在电脑完成官方 loopback OAuth，再用一次性连接码通过 HTTPS 传给本人的服务器。
-
-支持多注册账户选择、重新登录、加密保存、轮换续期、断开撤销和用量入口。完整操作见 [官方登录说明](docs/CHATGPT_LOGIN.md)。连接或切换账号会暂停 AI 自动任务与账户自动交易，需要重新选择模型和启用。API 余额不足、授权失效、计划额度耗尽、模型权限和网络错误分别提示。
-
-真实交易默认锁定。测试使用签名令牌与网络替身，不代表此账户已通过 OpenAI 的共享资格或完成真实授权。
-
-
-## 0.4.0 服务器 ChatGPT 登录
-
-在「数据与 AI」选择 **Continue with ChatGPT · 服务器登录**，生成设备码后在 OpenAI 官方页面确认，返回选择模型即可。服务器使用独立用户运行固定版本官方 Codex，负责凭据保存、续期和调用；无需 Mac 终端、登录助手或手动上传凭据。API Key 和旧版官方授权继续独立保留。登录/切换会暂停自动交易，真实交易默认锁定。
-
-安装升级会配置 `quantpilot-ai` 服务及只在本机可用的 Unix socket，不增加公网端口。支持 Linux x86_64/aarch64；需允许访问 OpenAI 官方登录和 Codex 服务。使用 `sudo qp ai-status` / `ai-restart` / `ai-logs` 管理。[操作、隔离与备份说明](docs/CHATGPT_LOGIN.md)。
-
-
-## 0.4.1 调用兼容性修复
-
-修复固定 Codex 0.165.0 已移除的 `readOnly.access` 请求字段，改用显式 `quantpilot` 权限配置并验证服务返回的配置标识。配置只允许读取空工作目录，命令网络关闭；AI 用户与交易密钥的系统级隔离不变。安装器同时校验并安装官方配套 bubblewrap，在替换运行版本之前，用无登录凭据的临时目录执行真实 `thread/start` / `turn/start` 协议验收。协议错误和沙箱组件缺失分别提示，避免误导用户反复重新登录。
-
-沙箱组件还需要本机 `AF_NETLINK` 来建立其私有网络命名空间中的回环接口。服务只增加该本机内核通信类型，命令网络仍关闭，能力集合仍为空；交易数据目录仍不可见。安装前检查现在复制实际 systemd 隔离属性执行，既检查 RPC 协议，也检查服务环境能否启动沙箱。
+Run one application process per data directory. Keep configuration, databases, encryption keys, authorization state and backups out of Git. The retired v1 spot console is removed in 0.14.0; upgrade backs it up before deleting its own tables/keys and preserves the current workspace.

@@ -1,66 +1,11 @@
-# 0.2.1 测试与自审记录
+# Validation / 驗證紀錄
 
-日期：2026-10-27，Asia/Shanghai。环境：macOS ARM64 / Python 3.12.14，固定 CCXT 4.5.90。
+## 0.14.0
 
-| 检查 | 结果 |
-|---|---|
-| 全部自动测试 | **203 passed**（含旧版 122 项回归、新版 81 项） |
-| 总语句覆盖率 | **80%** |
-| 新模拟账户 / AI / 执行组件 | 87% / 93% / 78%（执行组件为替身测试） |
-| Python 静态检查 | Ruff 通过 |
-| JavaScript 与安装脚本 | Node / Bash 语法检查通过 |
-| 浏览器 | 登录、账户改名、新增独立 25,000 模拟资金账户、AI 禁用状态设置保存、交易所修改、K 线周期切换通过；未发现浏览器脚本错误 |
-| 公开市场探测 | OKX / Gate BTC USDT 永续盘口、W/D/4h/1h 各 179 根完成 K 线、资金费率、OI 可读 |
-| 公开辅助数据 | 美联储日历/公告、Deribit BTC 期权、Gate 已发生清算统计读取通过 |
-| Binance | 开发网络访问不可用；没有改写时间戳、切换其他交易所或生成假行情 |
+- Python 3.12 local suite: 550 tests passed. Ruff and JavaScript syntax checks passed.
+- Tests include paused-account persistence, concurrent edit conflicts, display-order isolation, v1 cleanup preserving current data, sentiment source dates and scoring switches, loss-addition cooldown/count/risk constraints, long/short trailing ratchets, restart durability, one-shot partial exits, stale quote rejection and AI outage protection.
+- An exchange mock verifies a partial trailing exit does not suppress a later hard-stop exit. This is not exchange certification.
+- Browser verification at desktop and 390px mobile width: paused account edits, refresh preserving page, saved custom sound, sound decode/test, ordering and notification layout. Browser console contained no errors at completion.
+- Production deployment and health checks are recorded separately outside the repository; this file does not assert a deployment succeeded.
 
-覆盖率为本次实际结果，不沿用旧版 90% 的数字。测试客户端有一条 Starlette/httpx 弃用提示。覆盖率不代表独立审计或实盘认证。
-
-## 新版重要用例
-
-- 多账户资金隔离、并发同一信号只成交一次、重置保留审计并换代。
-- 固定币数量不得悄悄缩小，最大仓位预留加仓额度；次数/方向/亏损加仓/跨所授权/日损失限制。
-- 过期/错误报价阻止成交、部分止盈和保本保护、机会失效只减半一次。
-- 暂停新仓本身不引发减仓，停用账户仍执行原有止损；新旧全局暂停一致。
-- 三交易所 IOC 部分成交后按实际数量安装只减仓原生保护；Gate 参数前缀规范。
-- 未知开仓回执不重试且锁定跨重建持久化；保护安装失败时确认紧急退出；被取消的原生止损触发保护性退出。
-- AI 结构校验、匿名化输入不包含密钥、评分不得超过证据覆盖、不同风险偏好的收益风险比限制。
-- AI 收紧模拟及交易所保护，旧信号返回的 AI 结果不能应用到新信号。
-- 删除/更换正在持仓的交易对拒绝，已保存配置不回显密钥；接口登录/CSRF/格式/时间有效期。
-- 公开清算严格标注单市场；过期 ETF 披露不以查询时间刷新。
-- 真实执行验收记录绑定账户凭据、版本、交易所，过期/文件权限错误拒绝。
-
-## 0.2.1 补充验证
-
-- 真实账户无模拟资金；账户归档删除、凭据清理、历史保留、已删除账户不能被旧请求恢复；活动/持仓/不确定订单拒绝删除。
-- 旧名义金额不会误转币数量；固定币数量、加仓百分比和最大总币数量在涨价后仍准确；逐交易对杠杆/交易所上限和 OKX 合约张数档位。
-- 三类 API Key 删除、AI 停用及缓存失效；模型列表排序去重、失败回退、不泄漏服务响应。
-- ETF 不完整、非有限值、合计不一致拒绝；过期不重新标记为新鲜；公开新闻 RSS 回退保留时间、来源，不伪造财报日历。
-- 浏览器实测真实账户无模拟资金仍可保存；OKX BTC 公开规格读取返回 100 倍上限、0.0001 BTC 步长；加仓 25,20 保存后回显一致；模型无 Key 时回退自定义；长弹窗保留标题/关闭/操作区。
-
-## 自审中修正
-
-旧信号跨市场使用、最大仓位没有为加仓留空间、固定加仓被浮盈误挡、未知保护修改可能再次发送、AI 返回时信号已变更、全局暂停未覆盖旧引擎、暂停按钮误触发失效减仓、行情详情刷新时折叠、私有凭据在持仓期间被替换等问题已修正并补充相应用例。
-
-## 未完成的外部验收
-
-1. 无实际交易所账户密钥，未向交易所测试网或生产环境提交订单。原生保护、真实手续费和各种账户模式仍需实际联调。
-2. 未调用 OpenAI 付费接口；结构与失败路径用替身验证。
-3. 未使用 CoinGlass/Finnhub 有效套餐密钥；接口结构适配不代表用户套餐权限已验收。
-4. 未完成历史回测、长时间模拟观察、全市场新闻覆盖、各交易所准确撮合复制、独立安全审查。
-5. GitHub Actions 仍为待启用模板，本地测试结果不代表远程 CI 通过。
-6. 原始 starter ZIP 不可访问，未导入对比。
-
-服务器升级及最终域名检查的结果记录在本次交付的发布记录中，不能从本地测试推断已经部署。
-
-## 0.3.0 补充验证（2026-10-28）
-
-- macOS ARM64 / Python 3.12.14：**284 passed，总语句覆盖率 82%**。新增官方登录测试 34 项；未调用真实模型或交易所下单。
-- 本机真实 loopback HTTP 回调 + 模拟官方接口：启动监听、PKCE、state、nonce、动态注册 client ID、同一 redirect_uri 交换、HTTPS 配对导入、凭据不落地。
-- RSA 签名、issuer/audience/期限/nonce、错误算法、错误身份、一次性码过期和重放拒绝；账号分离、切换与暂停、API Key 删除不影响官方连接。
-- 并发轮换只续期一次、权限缩减后拒绝调用、终止续期错误清除令牌、暂时失败保留并退避、最早续期时间、撤销成功/失败、保留注册映射。
-- 计划模型目录格式与排序、OAuth 流式请求参数、只有完成事件可接受、额度错误出现在流中仍暂停、绝不自动转用 API Key。
-- API 余额耗尽显示具体原因及账单入口；错误内容只返回固定文案和许可的代码，不回显供应商响应或密钥。
-- 浏览器已验证两种方式切换、官方连接入口、授权引导弹窗，控制台未发现脚本错误；真实账户是否具备计划共享资格仍需用户本人完成官方登录后验证。
-
-运行依赖审计：固定版本未发现已知漏洞；仅表示所用漏洞数据库在检查时没有匹配条目。
+本地測試與瀏覽器操作已驗證；交易所測試網／實盤撮合、各帳戶權限和精確保證金模型仍需逐項驗收。聲音受瀏覽器手勢、裝置音量與背景限制。

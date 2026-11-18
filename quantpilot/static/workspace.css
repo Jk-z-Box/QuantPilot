@@ -2511,3 +2511,27 @@ dialog[open] {
 .market-result > input {
   margin: 0;
 }
+
+.session-loading {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  color: var(--muted);
+  flex-direction: column;
+}
+.order-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-bottom: 1px solid #dce9e4;
+}
+.order-row strong {
+  flex: 1;
+}
+.order-row button {
+  min-width: 44px;
+  min-height: 44px;
+}

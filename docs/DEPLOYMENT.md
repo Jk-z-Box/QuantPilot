@@ -1,4 +1,13 @@
-# Linux 安装、域名与 GitHub 发布
+# Deployment / Linux 部署與 Cloudflare Origin Rules
+
+Use the one-command installer in [English README](../README.md#get-started) or [繁體中文](../README.zh-TW.md). It pins the current main commit before executing. Add `--upgrade` for existing installations. Passwords are entered interactively; never put credentials in a command or Git.
+
+First install supports `--port`, `--username`, `--origin`, `--tls-cert` and `--tls-key`. `qp` opens the management menu; `qp status`, `qp backup`, `qp doctor` and `qp --help` provide shortcuts. Program releases live under `/opt/quantpilot`; private state stays under `/var/lib/quantpilot`.
+
+Cloudflare route: browser HTTPS → proxied DNS → Origin Rule destination port → TLS listener/reverse proxy → application. A port override does not convert TLS to HTTP. Use Full (strict), an origin certificate for your hostname, and a proxy that forwards WebSocket Upgrade headers. Exclude the console from caching. Keep the configured public origin equal to the browser origin.
+
+首次安裝可自訂端口、帳號與 TLS。升級會備份並保留目前工作台資料；自動交易於重啟後暫停。新版更新來源是 main，無需 GitHub Token。完整步驟與既有配置參考如下。
+
 
 ## 安装条件
 
@@ -15,7 +24,7 @@ sudo apt-get install -y python3 python3-venv python3-pip ca-certificates git
 
 ## 从交付压缩包安装
 
-解压 `QuantPilot-0.3.0.zip`，进入 `QuantPilot` 目录，运行：
+解压 `QuantPilot-0.14.0.zip`，进入 `QuantPilot` 目录，运行：
 
 ```bash
 sudo bash scripts/install.sh --port 8080 --username admin

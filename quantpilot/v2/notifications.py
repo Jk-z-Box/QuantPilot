@@ -36,7 +36,7 @@ class Channels(Model):
 class NotificationSettings(Model):
     telegram_enabled: bool = False
     sound_enabled: bool = False
-    sound_tone: Literal["chime", "bell", "pulse", "alert"] = "chime"
+    sound_tone: Literal["chime", "bell", "pulse", "alert", "warm", "custom_y1462"] = "chime"
     sound_volume: int = Field(default=75, ge=0, le=100, strict=True)
     telegram: Channels = Field(default_factory=Channels)
     sound: Channels = Field(default_factory=Channels)
@@ -71,7 +71,7 @@ def trade_event(store, db, identity, aid, action, detail):
         action
         if action in ("open", "add")
         else "take_profit"
-        if reason == "take_profit"
+        if reason in ("take_profit", "trailing_take_profit")
         else "stop_loss"
         if reason in ("stop_loss", "liquidation_distance")
         else "reduce"

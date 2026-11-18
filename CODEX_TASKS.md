@@ -1,34 +1,13 @@
-# QuantPilot 0.2 交接
+# Maintainer handoff / 維護交接
 
-## 本轮已实现
+Current source: 0.14.0 on main. Read README, docs/V0140.md and docs/ARCHITECTURE.md first.
 
-- [x] 新中文响应式控制台：市场、账户、记录、数据与 AI；旧账本独立保留。
-- [x] 可编辑五资产监测、Binance/OKX/Gate USDT 永续、周期 K 线及多周期评分。
-- [x] 公开美联储、Deribit、Gate 清算统计；可配置 CoinGlass / Finnhub，来源与失效状态。
-- [x] 保守/平衡/激进、80 分门槛、两档止盈、时效与风险重评。
-- [x] 多个独立模拟账户、多空、固定/最大仓位、加仓设置、重置、分批保护。
-- [x] 多交易所账户凭据隔离/白名单/只读核对；默认关闭的 IOC/原生保护执行组件。
-- [x] 受限 OpenAI 评分/时效/保护调整，响应校验、数据最小化、失败关闭。
-- [x] 新旧全局暂停一致、Linux 升级兼容、命令行状态和管理。
-- [x] 单元/集成测试、浏览器操作验证、公开 API 只读探测。
+- Preserve live execution gates and credential-bound certification; never equate mocks with exchange acceptance.
+- Preserve v2 accounts, positions, history generations, strategy archives, vault and server-side Codex login during upgrades.
+- Do not raw-open/close an existing SQLite database file: POSIX descriptor closure can release process locks. Use Store's exclusive connection checkout and SQLite APIs.
+- Keep trading and display ordering separate. Account edits must include the expected revision.
+- New loss-addition and trailing controls are per pair and disabled by default; test linear/inverse and long/short paths when changing execution.
+- Run pytest, Ruff, JS syntax checks, responsive browser checks and read-only production health checks appropriate to the change.
+- Keep secrets and backups outside Git. Publish reviewed source to main; deploy a full commit, never a moving ref.
 
-## 发布与部署
-
-仓库为公开的 `Jk-z-Box/QuantPilot`。发布优先使用安全 GitHub 连接，固定提交部署；以外部交付的发布记录为最终提交/部署结果，勿把本文件当作已执行证明。Cloudflare 现有代理链为 HTTPS 回源 → Nginx → 本机 QuantPilot。无需因升级改动域名或端口。
-
-## 尚需真实环境验收
-
-- [ ] 用户在网页保存各交易所只读/测试环境凭据，验证账户权限与模式。
-- [ ] 完成 `docs/ACCEPTANCE.md` 的各交易所测试网验收和独立审查，当前禁止声称实盘已认证。
-- [ ] 用户在网页选择 OpenAI 模型、密钥及是否发送匿名资金/持仓数据；实际 API 费用与输出验收。
-- [ ] CoinGlass / Finnhub 有效套餐联调；未开通的 ETF、股票期权、热力图不伪造。
-- [ ] 原始 starter ZIP 若恢复可访问，单独对比导入；当前是独立实现。
-- [ ] 经授权启用 GitHub Actions 模板并取得实际 CI 结果。
-- [ ] 历史回测、各交易所精确撮合/保证金模型、滚动相关性、WebSocket、MFA、多用户和灾备。
-
-每次继续工作先读测试报告。明确区分接口已实现、替身通过、真实服务通过；保持实盘默认关闭，不保存或复述泄露凭据。
-
-
-## 0.4.0 服务器设备码登录
-
-已实现：官方 Codex app-server 设备授权、Unix socket 隔离服务、模型目录、结构化风险复核、带来源核验的联网补全；API Key 和旧版 SIWC 保留。登录/切换清理旧 AI 建议并暂停自动交易。待用户完成官方登录后验证真实账户额度、模型推理及搜索能力；不得将协议替身测试表述为真实授权成功。
+仍需逐交易所測試網與實盤驗收；尚未提供完整歷史回測、交易所精確保證金／撮合模型、多使用者權限或高可用叢集。公開證據缺失時保留缺失，不以 AI 編造數值。

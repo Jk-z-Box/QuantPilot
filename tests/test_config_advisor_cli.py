@@ -1,12 +1,9 @@
-import json
 import os
 import tarfile
 
-import httpx
 import pytest
 from pydantic import ValidationError
 
-from quantpilot.advisor import advise
 from quantpilot.cli import backup, cloudflare_rule, main
 from quantpilot.config import Settings, atomic_json, hash_password, load_settings, verify_password
 from quantpilot.store import Store, Vault
@@ -77,35 +74,8 @@ def test_vault_and_backup_can_restore(tmp_path, settings):
         backup(path, destination)
 
 
-def test_advice_strict_read_only_request(settings, tmp_path):
-    settings.openai_enabled, settings.openai_model = True, "test-model"
-    vault = Vault(Store(tmp_path))
-    vault.put("openai", {"apiKey": "unit-key"})
-
-    def handler(request):
-        body = json.loads(request.content)
-        assert str(request.url) == "https://api.openai.com/v1/responses"
-        assert body["store"] is False and "tools" not in body
-        assert body["text"]["format"]["strict"] is True
-        assert "private-position" not in body["input"]
-        advice = {"assessment": "wait", "summary": "等待", "risks": ["波动"]}
-        return httpx.Response(200, json={"status": "completed", "output": [{"type": "message", "content": [{"type": "output_text", "text": json.dumps(advice)}]}]})
-
-    result = advise(settings, vault, {"equity": "100", "exposure": "0", "positions": "private-position"}, {}, httpx.MockTransport(handler))
-    assert result["assessment"] == "wait"
 
 
-@pytest.mark.parametrize("response", [
-    {"status": "incomplete", "output": []},
-    {"status": "completed", "output": [{"type": "message", "content": [{"type": "refusal", "refusal": "No"}]}]},
-    {"status": "completed", "output": [{"type": "message", "content": [{"type": "output_text", "text": '{"assessment":"buy","execute":true}'}]}]},
-])
-def test_advice_malformed_or_refusal_fails_closed(settings, tmp_path, response):
-    settings.openai_enabled, settings.openai_model = True, "test-model"
-    vault = Vault(Store(tmp_path))
-    vault.put("openai", {"apiKey": "unit-key"})
-    with pytest.raises(ValueError, match="invalid_response"):
-        advise(settings, vault, {}, {}, httpx.MockTransport(lambda _: httpx.Response(200, json=response)))
 
 
 def test_cloudflare_rule_only_changes_destination_port():

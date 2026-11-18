@@ -33,8 +33,6 @@ class Store:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-                CREATE TABLE IF NOT EXISTS orders (
-                    id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, result TEXT NOT NULL, created REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS audit (
                     id INTEGER PRIMARY KEY, created REAL NOT NULL, event TEXT NOT NULL, detail TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS sessions (
@@ -43,15 +41,7 @@ class Store:
                 CREATE INDEX IF NOT EXISTS attempts_created ON attempts(created);
                 CREATE TABLE IF NOT EXISTS credentials (name TEXT PRIMARY KEY, encrypted BLOB NOT NULL);
             """)
-            db.execute("INSERT OR IGNORE INTO kv VALUES (?,?)", ("account", json.dumps({
-                "cash": initial_cash, "positions": {}, "realized_pnl": "0", "fees": "0",
-                "day": "", "day_equity": initial_cash,
-            })))
             db.execute("INSERT OR IGNORE INTO kv VALUES ('kill', 'false')")
-            db.execute("INSERT OR IGNORE INTO kv VALUES ('strategy', ?)", (json.dumps({
-                "enabled": False, "exchange": "okx", "symbol": "BTC/USDT", "timeframe": "1h",
-                "budget": "100", "stop_pct": "0.02", "take_pct": "0.04",
-            }),))
             db.execute("INSERT OR IGNORE INTO kv VALUES ('schema_version', '1')")
 
     @contextmanager
@@ -118,15 +108,16 @@ class Store:
     @staticmethod
     def audit(db, event: str, detail: dict):
         # Call sites pass explicit allowlisted fields, never request bodies or exception messages.
-        db.execute("INSERT INTO audit(created,event,detail) VALUES (?,?,?)",
-                   (time.time(), event, json.dumps(detail)))
+        db.execute(
+            "INSERT INTO audit(created,event,detail) VALUES (?,?,?)", (time.time(), event, json.dumps(detail))
+        )
 
     def record(self, event, detail):
         with self.transaction() as db:
             self.audit(db, event, detail)
 
     def recent(self, table: str, limit=100):
-        if table not in ("audit", "orders"):
+        if table != "audit":
             raise ValueError("Unknown table")
         with self.connect() as db:
             rows = db.execute(f"SELECT * FROM {table} ORDER BY created DESC LIMIT ?", (limit,)).fetchall()  # noqa: S608
@@ -135,10 +126,6 @@ class Store:
     def set_kill(self, enabled: bool):
         with self.transaction() as db:
             self.write(db, "kill", enabled)
-            if enabled:
-                config = self.read(db, "strategy")
-                config["enabled"] = False
-                self.write(db, "strategy", config)
             row = db.execute("SELECT value FROM kv WHERE key='v2_preferences'").fetchone()
             if row:
                 prefs = json.loads(row[0])
