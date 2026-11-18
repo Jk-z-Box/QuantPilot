@@ -183,6 +183,14 @@ def install(app, workspace, session, mutation):
         workspace.auth_changed()
         return result
 
+    @app.post("/api/v2/accounts/{aid}/risk-review", dependencies=[Depends(mutation)])
+    def risk_review(aid: str):
+        return safe(workspace.risk_reviews.request, aid, True)
+
+    @app.get("/api/v2/accounts/{aid}/risk-history", dependencies=[Depends(session)])
+    def risk_history(aid: str):
+        return workspace.risk_reviews.history(aid)
+
     @app.get("/api/v2/limits/{instrument_id}", dependencies=[Depends(session)])
     def limits(instrument_id: str, exchange: str = "binance", account_id: str = ""):
         return safe(workspace.limits, instrument_id, exchange, account_id)
@@ -251,6 +259,8 @@ def install(app, workspace, session, mutation):
     def account(body: AccountSave):
         if body.id and body.expected_revision is None:
             raise HTTPException(409, "请刷新网页并重新打开账户设置后保存")
+        if body.id and not {"risk_policy", "risk_ai"} <= body.model_fields_set:
+            raise HTTPException(409, "账户表单版本过旧，请刷新后重新打开；原账户额度未修改")
         return safe(
             workspace.save_account, body.model_dump(exclude={"expected_revision"}), body.expected_revision
         )

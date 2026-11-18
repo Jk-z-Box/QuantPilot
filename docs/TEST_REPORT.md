@@ -1,5 +1,15 @@
 # Validation / 驗證紀錄
 
+## 0.15.0
+
+- Python 3.12 local suite: **584 tests passed**, no failures/skips; 84% total line coverage. Ruff, JavaScript syntax and installer shell syntax checks passed.
+- New coverage: independent and disabled account limits, fixed rejection breakdowns, shared add budgets, explicit pair allocation, legacy migration, UTC equity baselines, AI authorization/ranges, stale configuration/fill/model results, queue fairness, manual evaluation with auto off, unchanged-result notification suppression, protection during AI failures, and existing protection surviving policy edits.
+- Exchange mocks check regular/algo order ID collisions, OKX algo scopes and fail-closed pagination. No paid model request or real order was sent during these tests. They are not venue certification.
+- Browser verification at desktop and 390px mobile: paused-account saves, independent switches, revision-safe edits, history, restore-to-form without saving, refresh retaining the page, no horizontal overflow, dialog scroll reset and no console errors.
+- Production deployment and preservation checks are recorded separately outside the repository.
+
+本版通過 584 項本地測試及桌面／手機界面驗證。舊帳戶按原有效額度遷移；真實交易、交易所撮合及精確維持保證金檔位仍須另行驗收。
+
 ## 0.14.0
 
 - Python 3.12 local suite: 550 tests passed. Ruff and JavaScript syntax checks passed.

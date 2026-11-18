@@ -13,7 +13,7 @@ import httpx
 
 from .config import atomic_json
 
-VERSION = "0.14.0"
+VERSION = "0.15.0"
 REPOSITORY = "Jk-z-Box/QuantPilot"
 BRANCH = "main"
 STATUS = Path("/var/lib/quantpilot-maintenance/status.json")

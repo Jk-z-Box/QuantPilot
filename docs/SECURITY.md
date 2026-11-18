@@ -12,3 +12,9 @@
 这是单管理员、单进程应用。没有 MFA、多人权限、不可篡改审计或自动灾备；本地管理员可修改审计与验收记录。日损失/止损预算不保证实际最大损失，跳空、断网和交易所错误仍会影响执行。
 
 不把交易所提款权限交给本应用。不在聊天、仓库或日志保存任何 API Secret、Token 或密码。历史聊天中出现的 GitHub 凭据应撤销；优先使用 GitHub 安全连接。若连接写入权限不足且用户明确授权临时凭据，凭据仅在进程内存中使用，不写入文件、环境变量或日志。
+
+## Account capital AI / 帳戶額度 AI
+
+0.15.0 allows only explicitly delegated limit changes within per-field numeric bounds and switch permissions. It cannot change its authority, leverage, margin mode, pair authorization or live gates. Results are revalidated against fresh account state and the settings revision before an atomic update with a backup. Missing/stale required assessments block entries/additions; existing protective exits continue. Unchanged assessments do not send intervention alerts.
+
+帳戶額度 AI 預設關閉；手動與自動評估使用相同權限檢查。公開匯出的額度備份不包含憑據，但仍含帳戶名稱與設定，請自行保管。

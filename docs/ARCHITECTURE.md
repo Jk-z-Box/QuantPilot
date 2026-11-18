@@ -21,6 +21,7 @@ completed candles → signals → account sizing/risk → optional AI review
 | `v2/market_streams.py`, `funds.py`, `realtime.py` | Exchange subscriptions, reconciliation, fanout and freshness |
 | `v2/signals.py`, `rules.py`, `logic.py` | Active parameters, scoring, logic versions, review and backups |
 | `v2/accounts.py`, `execution.py`, `risk_context.py` | Sizing, balances, exposure, liquidation and order lifecycle |
+| `v2/risk_policy.py`, `risk_budget.py`, `risk_review.py` | Account budgets, explicit per-pair allocation, bounded/coalesced AI reviews and atomic backups |
 | `v2/position_automation.py` | Explicit loss-addition eligibility and durable one-shot trailing exits |
 | `v2/journal.py` | Decision snapshots, fills, costs and retrospective evidence |
 | `v2/feeds.py`, `sentiment.py`, `research.py` | Sourced observations, publication dates, scope and AI retrieval verification |

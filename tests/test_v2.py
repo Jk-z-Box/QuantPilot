@@ -388,6 +388,8 @@ class ExecutionClient:
     def fetch_market_leverage_tiers(self, symbol):
         return [{"minNotional": 0, "maxNotional": 1000000, "maxLeverage": 100}]
 
+    options = {}
+
     def set_sandbox_mode(self, enabled):
         self.sandbox = enabled
 
@@ -396,6 +398,9 @@ class ExecutionClient:
 
     def fetch_positions(self, symbols=None):
         return [p.copy() for p in self.positions.values() if p["contracts"] > 0]
+
+    def fetch_open_orders(self, limit=None, params=None):
+        return [{**o, "reduceOnly": True} for o in self.orders.values() if o["status"] == "open"]
 
     def fetch_position_mode(self, symbol):
         return {"hedged": False}
@@ -496,6 +501,29 @@ def demo_account(workspace, monkeypatch, exchange="binance"):
     a = workspace.save_account(a)
     broker = ExchangeBroker(workspace.store, workspace.vault, ExecutionClient)
     return a, broker
+
+
+@pytest.mark.parametrize("exchange", ["binance", "okx", "gate"])
+def test_risk_snapshot_keeps_every_order_scope(workspace, monkeypatch, exchange):
+    a, b = demo_account(workspace, monkeypatch, exchange)
+    client = b.client(a)
+    queries = []
+
+    def pending(limit=None, params=None):
+        queries.append(params)
+        return [{"id": "same-id", "symbol": "BTC/USDT:USDT", "reduceOnly": len(queries) == 1}]
+
+    monkeypatch.setattr(client, "fetch_open_orders", pending)
+    result = b.read(a, include_orders=True)
+    assert len(result["open_orders"]) == (9 if exchange == "okx" else 2)
+    assert result["open_orders"][0]["reduceOnly"] is True
+    assert result["open_orders"][-1]["reduceOnly"] is False
+    assert len({o["scope"] for o in result["open_orders"]}) == len(queries)
+    if exchange == "okx":
+        assert {q.get("ordType") for q in queries} >= {"conditional", "oco", "twap", "chase"}
+    monkeypatch.setattr(client, "fetch_open_orders", lambda **kwargs: [{}] * 100)
+    with pytest.raises(ValueError, match="分页上限"):
+        b.read(a, include_orders=True)
 
 
 @pytest.mark.parametrize("exchange", ["binance", "okx", "gate"])
@@ -872,7 +900,7 @@ def test_live_receipt_is_bound_expiring_private_and_blockable(workspace, monkeyp
     workspace.vault.put("v2:account:" + a["id"], secret)
     monkeypatch.setenv("QP_LIVE_EXECUTION", "1")
     cert = {
-        "version": "0.14.0",
+        "version": "0.15.0",
         "settle": "USDT",
         "exchange": "binance",
         "credential_fingerprint": hashlib.sha256(json.dumps(secret, sort_keys=True).encode()).hexdigest(),

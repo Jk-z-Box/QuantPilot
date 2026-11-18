@@ -6,6 +6,7 @@
     <meta name="color-scheme" content="light" />
     <title>QuantPilot · 市场与交易工作台</title>
     <link rel="stylesheet" href="/static/workspace.css" />
+    <script src="/static/risk-settings.js" defer></script>
     <script src="/static/workspace.js" defer></script>
     <script src="/static/management.js" defer></script>
     <script src="/static/notifications.js" defer></script>
@@ -76,7 +77,7 @@
         </nav>
         <div class="sidebar-bottom">
           <button id="logout" class="text-button">退出登录</button
-          ><small>QUANTPILOT 0.13</small>
+          ><small>QUANTPILOT 0.15</small>
         </div>
       </aside>
       <div class="main">
@@ -115,8 +116,8 @@
             </div>
             <div class="heading-actions" aria-label="交易设置">
               <div class="heading-control">
-                <label for="profile">风险偏好</label
-                ><select id="profile" aria-label="风险偏好">
+                <label for="profile">信号评估风格</label
+                ><select id="profile" aria-label="信号评估风格">
                   <option value="conservative">保守</option>
                   <option value="balanced">平衡</option>
                   <option value="aggressive">激进</option>
@@ -1015,7 +1016,7 @@
                 <div class="notice-box">
                   <b>统计口径</b>
                   <p class="small">
-                    仅统计本机当前版本、当前风险偏好与有效分数下，使用真实行情的模拟完整交易。分批平仓合并为一笔；净盈亏包含开平仓手续费、滑点与模拟资金费。演示数据、未平仓、重置掉的仓位、无法归属的旧交易和未核对的交易所盈亏不参与评分。
+                    仅统计本机当前版本、当前信号评估风格与有效分数下，使用真实行情的模拟完整交易。分批平仓合并为一笔；净盈亏包含开平仓手续费、滑点与模拟资金费。演示数据、未平仓、重置掉的仓位、无法归属的旧交易和未核对的交易所盈亏不参与评分。
                   </p>
                   <p class="small">
                     盈利因子 = 总盈利 ÷ 总亏损；盈亏比 = 平均盈利 ÷
@@ -1223,8 +1224,8 @@
                 </div>
                 <div id="systemInfo" class="system-info"></div>
                 <p class="fine">
-                  更新来源固定为你自己的 QuantPilot
-                  仓库 main 主分支。安装前自动备份，启动检查失败时回退程序版本；更新后自动交易保持暂停。
+                  更新来源固定为你自己的 QuantPilot 仓库 main
+                  主分支。安装前自动备份，启动检查失败时回退程序版本；更新后自动交易保持暂停。
                 </p>
                 <div class="form-actions">
                   <button class="secondary" id="checkUpdate">检查更新</button

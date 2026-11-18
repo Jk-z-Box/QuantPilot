@@ -38,6 +38,12 @@ from .notifications import Notifications, emit, opportunity_message
 from .position_automation import loss_add_ready
 from .position_review import PositionReviews
 from .research import ResearchEngine
+from .risk_budget import summary as risk_summary
+from .risk_policy import LIMITS
+from .risk_policy import migrate as migrate_risk
+from .risk_policy import policy as account_policy
+from .risk_policy import preset as risk_preset
+from .risk_review import RiskReviews, record_change
 from .rules import effective
 from .signals import evaluate, required_bars
 
@@ -104,7 +110,22 @@ class Workspace:
                     sizing.setdefault("margin_mode", "isolated")
                 if account["kind"] != "paper":
                     account["capital"] = None
-            accounts = {aid: Account.model_validate(a).model_dump() for aid, a in accounts.items()}
+            row = db.execute("SELECT value FROM kv WHERE key='v2_logic'").fetchone()
+            legacy_parameters = json.loads(row[0])["current"]["parameters"] if row else {}
+            if any("risk_policy" not in a for a in accounts.values()):
+                db.execute(
+                    "INSERT OR IGNORE INTO kv VALUES (?,?)",
+                    (
+                        "v2_risk_pre_v015",
+                        json.dumps(
+                            {"accounts": accounts, "preferences": prefs, "parameters": legacy_parameters}
+                        ),
+                    ),
+                )
+            accounts = {
+                aid: Account.model_validate(migrate_risk(a, prefs["profile"], legacy_parameters)).model_dump()
+                for aid, a in accounts.items()
+            }
             self.store.write(db, "v2_accounts", accounts)
             self.store.write(db, "v2_sizing_migration", migrated)
         self.funds = AccountStreams(self)
@@ -117,6 +138,9 @@ class Workspace:
         self.notifications = Notifications(self)
         self.history = History(self)
         self.position_reviews = PositionReviews(self)
+        self.risk_reviews = RiskReviews(self)
+        self.paper.risk_reviews = self.risk_reviews
+        self.exchange.risk_reviews = self.risk_reviews
         self.action_review = ActionReview(self)
         self.paper.action_review = self.action_review
         self.exchange.action_review = self.action_review
@@ -156,6 +180,7 @@ class Workspace:
         with self.store.transaction() as db:
             accounts = self.store.read(db, "v2_accounts")
             for account in accounts.values():
+                account["risk_ai"]["enabled"] = False
                 account["ai_action_enabled"] = False
                 account["position_review_enabled"] = False
                 account["strategy_recheck_enabled"] = False
@@ -258,6 +283,8 @@ class Workspace:
         prefs = self.store.get("v2_preferences")
         if account["ai_action_enabled"] and (not prefs["ai_model"] or not ready(prefs, self.vault)):
             raise ValueError("请先在数据与 AI 中连接 AI 并选择模型，再开启本账户交易前审核")
+        if account["risk_ai"]["enabled"] and (not prefs["ai_model"] or not ready(prefs, self.vault)):
+            raise ValueError("请先连接 AI 并选择模型，再启用账户额度自动管理")
         for sizing in account["sizing"]:
             if sizing["leverage"] > 1:
                 limits = self.limits(sizing["instrument_id"], account["exchange"], account["id"])
@@ -324,6 +351,8 @@ class Workspace:
                 raise ValueError("账户存在待核对订单，不能更改保证金模式")
             if old and old["capital"] != account["capital"]:
                 raise ValueError("修改初始资金请使用重置账户")
+            if old:
+                record_change(self.store, db, account, account_policy(old), "manual", "手动保存账户额度")
             accounts[account["id"]] = account
             if account["kind"] == "paper" and account["id"] not in books:
                 books[account["id"]] = ledger(account["capital"], account["settle"])
@@ -647,6 +676,7 @@ class Workspace:
         self.execute()
         self.streams.changed.set()  # The shared publisher also covers fills and protection changes.
         self.position_reviews.scheduled()
+        self.risk_reviews.scheduled()
 
     def review_ai(self, prefs=None):
         prefs = prefs or self.store.get("v2_preferences")
@@ -803,6 +833,7 @@ class Workspace:
                     except ValueError as exc:
                         rejection = {
                             "reason": str(exc),
+                            "budget": getattr(exc, "details", None),
                             "signal": {
                                 k: op.get(k)
                                 for k in (
@@ -853,6 +884,8 @@ class Workspace:
         prefs = self.store.get("v2_preferences")
         books, external = self.store.get("v2_ledgers"), self.store.get("v2_external")
         accounts = []
+        risk_records = self.store.get("v2_risk_reviews")
+        instruments = {i["id"]: i for i in self.store.get("v2_watchlist")}
         for a in self.store.get("v2_accounts").values():
             summary = (
                 valuation(books[a["id"]], quotes, now)
@@ -881,6 +914,17 @@ class Workspace:
                         "review_status": "未计划",
                     }
                 )
+            try:
+                book = (
+                    books[a["id"]]
+                    if a["kind"] == "paper"
+                    else self.exchange.risk_book(
+                        a, external.get(a["id"], {}), instruments, validate_buffers=False
+                    )
+                )
+                budgets = risk_summary(a, book, valuation(book, quotes, now), quotes, instruments)
+            except (ValueError, KeyError, TypeError):
+                budgets = {"valuation_valid": False, "message": "资金、持仓或待成交订单尚未完整核验"}
             accounts.append(
                 {
                     **a,
@@ -890,6 +934,8 @@ class Workspace:
                     "credential_saved": bool(self.vault.get("v2:account:" + a["id"])),
                     "last_error": self.errors.get(a["id"]),
                     "position_review": self.position_reviews.state(a),
+                    "risk_budget": budgets,
+                    "risk_review": risk_records.get(a["id"], {}),
                 }
             )
         with self.store.connect() as db:
@@ -907,7 +953,7 @@ class Workspace:
         return {
             "history_scope": self.logic.history_scope(),
             "position_changes": changes,
-            "version": "0.14.0",
+            "version": "0.15.0",
             "now": now,
             "demo": self.market.demo,
             "watchlist": self.store.get("v2_watchlist"),
@@ -916,6 +962,10 @@ class Workspace:
             "quotes": quotes,
             "opportunities": ops,
             "accounts": accounts,
+            "risk_schema": {
+                "limits": LIMITS,
+                "presets": {k: risk_preset(k) for k in ("conservative", "balanced", "aggressive")},
+            },
             "orders": orders,
             "archived_accounts": {
                 k: v["account"]["name"] for k, v in self.store.get("v2_archived_accounts").items()
@@ -1002,6 +1052,7 @@ class Workspace:
         self.funds.stop()
         self.action_review.pool.shutdown(wait=False, cancel_futures=True)
         self.position_reviews.pool.shutdown(wait=False, cancel_futures=True)
+        self.risk_reviews.pool.shutdown(wait=False, cancel_futures=True)
         self.history.pool.shutdown(wait=False, cancel_futures=True)
         if self.research.thread:
             self.research.thread.join(timeout=3)

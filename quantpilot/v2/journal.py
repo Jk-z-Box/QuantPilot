@@ -185,6 +185,8 @@ def sample(workspace):
         accounts = workspace.store.read(db, "v2_accounts")
         books = workspace.store.read(db, "v2_ledgers")
         external = workspace.store.read(db, "v2_external")
+        day = time.strftime("%Y-%m-%d", time.gmtime(now))
+        day_changed = False
         for aid, a in accounts.items():
             if a["kind"] == "paper":
                 if aid not in books:
@@ -192,6 +194,9 @@ def sample(workspace):
                 s = valuation(books[aid], quotes, now)
                 if not s.get("valuation_valid"):
                     continue
+                if books[aid]["day"] != day:
+                    books[aid].update(day=day, day_equity=s["equity"])
+                    day_changed = True
             else:
                 s = external.get(aid, {})
                 if s.get("error") or now - s.get("checked_at", 0) > 30:
@@ -208,6 +213,9 @@ def sample(workspace):
                     a["kind"],
                 ),
             )
+            if day_changed:
+                workspace.store.write(db, "v2_ledgers", books)
+                day_changed = False
             positions = (
                 books.get(aid, {}).get("positions", {})
                 if a["kind"] == "paper"

@@ -7,35 +7,28 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
+from .risk_policy import Allocation, RiskAI, RiskPolicy
+
 EXCHANGES = ("binance", "okx", "gate")
 FRAMES = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400, "1w": 604800}
 PROFILES = {
     "conservative": {
         "label": "保守",
-        "risk": 0.003,
-        "exposure": 0.30,
         "ttl": 120,
         "min_rr": 2,
         "volume": 1.2,
-        "adds": 1,
     },
     "balanced": {
         "label": "平衡",
-        "risk": 0.006,
-        "exposure": 0.60,
         "ttl": 180,
         "min_rr": 1.8,
         "volume": 1,
-        "adds": 2,
     },
     "aggressive": {
         "label": "激进",
-        "risk": 0.01,
-        "exposure": 0.90,
         "ttl": 240,
         "min_rr": 1.6,
         "volume": 0.8,
-        "adds": 3,
     },
 }
 
@@ -141,6 +134,7 @@ class Sizing(Model):
     mode: Literal["fixed", "maximum", "system"] = "maximum"
     quantity: float | None = Field(default=None, gt=0, le=1000000000)
     system_level: Literal["conservative", "balanced", "aggressive"] = "balanced"
+    allocation: Allocation = Field(default_factory=Allocation)
     leverage: int = Field(default=1, ge=1, le=1000)
     margin_mode: Literal["isolated", "cross"] = "isolated"
     loss_add: LossAdd = Field(default_factory=LossAdd)
@@ -165,6 +159,8 @@ class Account(Model):
     settle: str = Field(default="USDT", pattern=r"^[A-Z0-9]{1,20}$")
     capital: float | None = Field(default=None, gt=0, le=100000000)
     auto: bool = False
+    risk_policy: RiskPolicy = Field(default_factory=RiskPolicy)
+    risk_ai: RiskAI = Field(default_factory=RiskAI)
     ai_action_enabled: bool = False
     balance_stream_enabled: bool = True
     position_review_enabled: bool = False

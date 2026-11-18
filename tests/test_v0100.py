@@ -11,6 +11,7 @@ from quantpilot.v2.action_review import Decision
 from quantpilot.v2.entry_status import report
 from quantpilot.v2.models import Account, pair_enabled
 from quantpilot.v2.risk_context import account_context
+from quantpilot.v2.risk_policy import preset
 from quantpilot.v2.service import Workspace
 
 
@@ -224,6 +225,8 @@ def test_system_levels_and_budget_limits(workspace, account, opportunity, quote)
         a["sizing"][0].update(
             mode="system", quantity=None, system_level=level, add_count=0, margin_mode="cross"
         )
+        a["risk_policy"]["limits"] = preset(level)
+        a["sizing"][0]["allocation"]["available_margin_pct"] = fraction * 100
         a = Account.model_validate(a).model_dump()
         assert pair_enabled(a, "btc")
         order = sized(workspace, a, opportunity, quote)

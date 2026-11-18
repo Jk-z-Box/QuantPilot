@@ -2,9 +2,9 @@
 
 **A self-hosted, paper-first workspace for perpetual futures research and trade management.**
 
-[繁體中文](README.zh-TW.md) · [Deployment](docs/DEPLOYMENT.md) · [0.14.0 changes](docs/V0140.md) · [Documentation](docs/README.md)
+[繁體中文](README.zh-TW.md) · [Deployment](docs/DEPLOYMENT.md) · [0.15.0 changes](docs/V0150.md) · [Documentation](docs/README.md)
 
-QuantPilot brings market context, configurable strategies, separate account ledgers and optional AI review into one responsive web console. The current release is **0.14.0**, maintained on **main**. Live execution is disabled by default.
+QuantPilot brings market context, configurable strategies, separate account ledgers and optional AI review into one responsive web console. The current release is **0.15.0**, maintained on **main**. Live execution is disabled by default.
 
 ## What you can do
 
@@ -14,6 +14,7 @@ QuantPilot brings market context, configurable strategies, separate account ledg
 | Charts and state | Exchange-to-server and server-to-browser WebSocket streams, candle history, reconnect status, timestamps, REST recovery and SSE fallback. Millisecond timestamps do not promise millisecond exchange updates. |
 | Opportunities | Completed weekly, daily, 4-hour and hourly candles; EMA, RSI, MACD, ATR, volume, volatility, funding, OI and sourced market context. Configurable score threshold, expiry and parameter switches. |
 | Accounts | Independent paper, exchange test and live account configurations; per-pair quantity, leverage, isolated/cross margin, system sizing and addition budgets. |
+| Account budgets | Independent margin/exposure/stop-loss/daily/group/liquidation limits, explicit pair allocation, auditable rejection amounts and bounded AI capital management. |
 | Protection | Stops, staged targets, optional loss-addition evaluation and durable trailing take profit. Increasing exposure still requires fresh evidence, authorization and deterministic risk checks. |
 | Optional AI | OpenAI API or server-side Codex login; opportunity review, account-specific pre-trade risk review, position review, sourced research and strategy retrospectives. AI cannot bypass execution gates. |
 | Operations | Telegram categories, browser sounds and volume, strategy export/import/retention, audit history, Linux installer, CLI and web updates. |
@@ -31,7 +32,7 @@ QP_REF=$(curl --proto '=https' --tlsv1.2 -fsSL https://api.github.com/repos/Jk-z
 For an existing installation, append `--upgrade`. For domain access and Cloudflare Origin Rules, follow [Deployment](docs/DEPLOYMENT.md) before exposing the console. Public installation requires no GitHub token.
 
 1. **Markets** — select a symbol and timeframe, inspect score components and missing evidence; use “调整排序” to arrange monitor tiles.
-2. **Accounts** — start with a paper account. Enable only intended pairs, configure sizing, then explicitly enable automation.
+2. **Accounts** — start with a paper account. Enable only intended pairs, configure sizing, then explicitly enable automation. Edit capital limits and AI authority within that account; “Evaluate and apply” can run without automatic capital management.
 3. **Data & AI** — choose optional connections and model; enable only the reviews you want. A ChatGPT subscription and API billing are separate.
 4. **Strategy** — edit active rules, inspect execution evidence and review history. Every change creates a backup; disabled parameters are excluded, not reset to defaults.
 5. **Settings** — manage sign-in, notifications, volume and updates. Refresh restores the current page, instrument and timeframe in that tab.

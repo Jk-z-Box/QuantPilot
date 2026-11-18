@@ -2535,3 +2535,94 @@ dialog[open] {
   min-width: 44px;
   min-height: 44px;
 }
+
+/* Account capital controls: compact on desktop, a single readable column on phones. */
+.risk-preset,
+.risk-card-actions {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+.risk-preset label {
+  flex: 1;
+  min-width: 180px;
+}
+.risk-limit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+.risk-limit {
+  padding: 14px;
+  border: 1px solid var(--line, #dce7e2);
+  border-radius: 10px;
+  min-width: 0;
+}
+.risk-limit .check {
+  min-height: 38px;
+  align-items: start;
+  line-height: 1.5;
+}
+.risk-limit small,
+.risk-usage small {
+  display: block;
+  color: var(--muted, #6d847b);
+  line-height: 1.6;
+  margin-top: 8px;
+}
+.risk-authority-row,
+.risk-history {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line, #dce7e2);
+  overflow-wrap: anywhere;
+}
+.risk-authority summary,
+.pair-allocation summary {
+  cursor: pointer;
+  padding: 12px 0;
+  font-weight: 600;
+}
+.pair-allocation {
+  margin: 14px 0;
+}
+.account-risk {
+  padding: 12px 0;
+  border-top: 1px solid var(--line, #dce7e2);
+  overflow-wrap: anywhere;
+}
+.risk-usage {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 18px 0;
+}
+.risk-usage > div {
+  border: 1px solid var(--line, #dce7e2);
+  border-radius: 10px;
+  padding: 12px;
+}
+.risk-usage strong {
+  display: block;
+  margin-top: 8px;
+}
+@media (max-width: 600px) {
+  .risk-limit-grid,
+  .risk-usage {
+    grid-template-columns: 1fr;
+  }
+  .risk-preset {
+    align-items: stretch;
+  }
+  .risk-preset button {
+    width: 100%;
+  }
+  .risk-card-actions button {
+    flex: 1;
+  }
+  .risk-limit .check {
+    min-height: 0;
+  }
+}

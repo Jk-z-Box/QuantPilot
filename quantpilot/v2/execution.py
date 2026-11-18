@@ -20,6 +20,7 @@ from .models import policy_matches
 from .notifications import trade_event
 from .position_automation import loss_add_ready, update_trailing
 from .position_changes import levels, record_changes
+from .risk_policy import fraction, protection_fraction
 from .rules import effective
 
 
@@ -94,7 +95,7 @@ class ExchangeBroker:
                 "cross_margin",
             )
             ready = (
-                cert["version"] == "0.14.0"
+                cert["version"] == "0.15.0"
                 and cert["exchange"] == account["exchange"]
                 and cert.get("settle") == account.get("settle", "USDT")
                 and (
@@ -119,7 +120,7 @@ class ExchangeBroker:
             ready = False
         return {"ready": ready, "reason": "验收记录有效" if ready else "缺少与当前账户匹配的实盘验收记录"}
 
-    def read(self, account):
+    def read(self, account, include_orders=False):
         started_at = time.time()
         client = self.client(account)
         with self.locks[account["id"]]:
@@ -138,7 +139,57 @@ class ExchangeBroker:
                 if account["exchange"] == "gate"
                 else None
             )
+            orders = None
+            if include_orders:
+                # All symbols: an unselected contract may still occupy the same wallet.
+                if account["exchange"] == "binance":
+                    client.options.setdefault("fetchOpenOrders", {})["warnWithoutSymbol"] = False
+                    client.options["warnOnFetchOpenOrdersWithoutSymbol"] = False
+                scopes = [("regular", params)]
+                if account["exchange"] == "okx":
+                    # OKX requires ordType; trigger alone omits other algo orders.
+                    scopes.extend(
+                        (kind, {**params, "method": "privateGetTradeOrdersAlgoPending", "ordType": kind})
+                        for kind in (
+                            "conditional",
+                            "oco",
+                            "trigger",
+                            "move_order_stop",
+                            "iceberg",
+                            "twap",
+                            "chase",
+                            "smart_iceberg",
+                        )
+                    )
+                else:
+                    scopes.append(("conditional", {**params, "trigger": True}))
+                orders = []
+                for scope, query in scopes:
+                    page = client.fetch_open_orders(limit=100, params=query)
+                    if len(page) >= 100:
+                        raise ValueError("挂单快照达到分页上限，暂停新增风险并要求核对")
+                    # Regular and algo IDs can collide; never discard either order.
+                    orders.extend({**order, "scope": scope} for order in page)
         result = snapshot(account, bal, positions, gate_metadata)
+        if orders is not None:
+            result["open_orders"] = [
+                {
+                    k: o.get(k)
+                    for k in (
+                        "id",
+                        "scope",
+                        "symbol",
+                        "side",
+                        "amount",
+                        "remaining",
+                        "price",
+                        "reduceOnly",
+                        "status",
+                    )
+                }
+                for o in orders
+            ]
+            result["orders_checked_at"] = time.time()
         result["read_started_at"] = started_at
         result["execution"] = self.availability(account)
         return result
@@ -186,13 +237,21 @@ class ExchangeBroker:
         item = instruments[key]
         if key not in account["allowed"] or item["exchange"] != account["exchange"]:
             raise ValueError("交易对未授权")
+        if getattr(self, "risk_reviews", None):
+            reason = self.risk_reviews.gate(account)
+            if reason:
+                raise ValueError(reason)
         client = self.client(account)
         with self.locks[aid]:
-            snapshot = self.read(account)
+            snapshot = self.read(account, include_orders=True)
             with self.store.transaction() as db:
                 external = self.store.read(db, "v2_external")
                 external[aid] = snapshot
                 self.store.write(db, "v2_external", external)
+            if getattr(self, "risk_reviews", None):
+                reason = self.risk_reviews.gate(account)
+                if reason:
+                    raise ValueError(reason)
             mode = (
                 {
                     "hedged": client.privateFuturesGetSettleAccounts(
@@ -312,6 +371,8 @@ class ExchangeBroker:
                     raise ValueError("账户已停止或配置已变化")
                 if db.execute("SELECT 1 FROM v2_orders WHERE id=?", (identity,)).fetchone():
                     return {"status": "duplicate_or_pending"}
+                if getattr(self, "risk_reviews", None):
+                    self.risk_reviews.commit_check(db, account)
                 unresolved = db.execute(
                     "SELECT 1 FROM v2_orders WHERE account_id=? AND state IN ('sending','unknown')",
                     (aid,),
@@ -437,9 +498,11 @@ class ExchangeBroker:
                 liquidation = D(position["liquidationPrice"])
                 mark = D(position["markPrice"])
                 sign = 1 if opportunity["direction"] == "long" else -1
-                if (mark - liquidation) * sign / mark < D(".05") or (
-                    sizing["stop"] - liquidation
-                ) * sign / mark < D(".03"):
+                if (mark - liquidation) * sign / mark <= D(
+                    sizing["risk"]["minimum_mark_to_liquidation_pct"]
+                ) / 100 or (sizing["stop"] - liquidation) * sign / mark <= (
+                    fraction(account, "stop_liq_pct") or D(0)
+                ):
                     raise ValueError("实际强平距离不足")
                 with self.store.transaction() as db:
                     managed = self.store.read(db, "v2_managed")
@@ -473,6 +536,7 @@ class ExchangeBroker:
                         "leverage": sizing["leverage"],
                         "margin_mode": sizing["margin_mode"],
                         "liquidation": str(liquidation),
+                        "liquidation_buffer_pct": sizing["risk"]["minimum_mark_to_liquidation_pct"],
                         "adds": old["adds"] + 1 if old else 0,
                         "last_add_at": time.time(),
                         "trailing": old.get("trailing", {}) if old else {},
@@ -577,8 +641,12 @@ class ExchangeBroker:
                     db.execute("UPDATE v2_orders SET state='unknown' WHERE id=?", (identity,))
                 raise ValueError("执行状态不确定，账户已暂停；请在交易所核对仓位和保护单") from None
 
-    def risk_book(self, account, snapshot, instruments):
+    def risk_book(self, account, snapshot, instruments, validate_buffers=True):
         aid = account["id"]
+        if snapshot.get("equity") is None or snapshot.get("available") is None or "positions" not in snapshot:
+            raise ValueError("账户权益、可用资金或仓位不完整")
+        if any(o.get("reduceOnly") is not True for o in snapshot.get("open_orders", [])):
+            raise ValueError("存在未完成的非减仓挂单，资金与止损风险待核对，暂停新增风险")
         if account.get("settle", "USDT") != "USDT" and (
             not snapshot.get("native_equity") or snapshot.get("balance_scope") != account["settle"]
         ):
@@ -610,7 +678,14 @@ class ExchangeBroker:
                 raise ValueError("发现未登记加仓，暂停自动交易")
             liq, mark = D(position["liquidationPrice"] or 0), D(position["markPrice"] or 0)
             sign = 1 if position["side"] == "long" else -1
-            if liq <= 0 or mark <= 0 or (mark - liq) * sign / mark < D(".05"):
+            if (
+                liq <= 0
+                or mark <= 0
+                or (
+                    validate_buffers
+                    and (mark - liq) * sign / mark <= (fraction(account, "mark_liq_pct") or D(0))
+                )
+            ):
                 raise ValueError("实际强平距离不足或不可验证")
             initial = D(position.get("initialMargin") or 0)
             if initial <= 0:
@@ -812,7 +887,7 @@ class ExchangeBroker:
                         and any("事件风险" in b for b in op.get("blockers", []))
                     )
                     or op.get("ai", {}).get("action") == "close"
-                    or (liq > 0 and (price - liq) * sign / price < D(".05"))
+                    or (liq > 0 and (price - liq) * sign / price <= protection_fraction(account, p))
                     or (price - D(p["stop"])) * sign <= 0
                 )
                 trail_only = trail_hit and not close
@@ -847,7 +922,7 @@ class ExchangeBroker:
                             else "stop_loss"
                             if (price - D(p["stop"])) * sign <= 0
                             else "liquidation_distance"
-                            if liq > 0 and (price - liq) * sign / price < D(".05")
+                            if liq > 0 and (price - liq) * sign / price <= protection_fraction(account, p)
                             else "trailing_take_profit"
                             if trail_only
                             else "risk_exit"

@@ -56,8 +56,6 @@ NUMERIC = {
     "add_default_ratio": (0.25, 0.01, 1.0, "加减仓与关联风险", "默认每次加仓比例"),
     "add_score_bonus": (5, 0, 30, "加减仓与关联风险", "加仓额外分数"),
     "risk_reduce_ratio": (0.5, 0.05, 1.0, "加减仓与关联风险", "风险减仓比例"),
-    "group_exposure_fraction": (0.75, 0.1, 1.0, "加减仓与关联风险", "同类资产敞口比例上限"),
-    "portfolio_risk_multiple": (3.0, 1.0, 3.0, "加减仓与关联风险", "组合止损预算 / 单笔预算"),
 }
 FLAGS = {
     "sentiment_enabled": ("指标", "BTC 恐惧与贪婪指数（加密市场参考）"),
@@ -178,10 +176,25 @@ def ordered(self):
     return self
 
 
+@model_validator(mode="before")
+def strip_retired(cls, data):
+    # Historical exports remain readable; these controls now belong to accounts.
+    if isinstance(data, dict):
+        data = {
+            k: v for k, v in data.items() if k not in ("group_exposure_fraction", "portfolio_risk_multiple")
+        }
+        data["overrides"] = {
+            k: v
+            for k, v in data.get("overrides", {}).items()
+            if k not in ("group_exposure_fraction", "portfolio_risk_multiple")
+        }
+    return data
+
+
 Parameters = create_model(
     "Parameters",
     __base__=Model,
-    __validators__={"ordered": ordered},
+    __validators__={"ordered": ordered, "strip_retired": strip_retired},
     **{
         k: (
             type(v[0]),
