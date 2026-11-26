@@ -5,7 +5,7 @@ Start with [English](../README.md) or [繁體中文](../README.zh-TW.md).
 | Guide | 內容 |
 |---|---|
 | [Deployment](DEPLOYMENT.md) | Linux, upgrades, CLI, Cloudflare Origin Rules / 安裝、域名與更新 |
-| [0.15.0](V0150.md) | Account budgets and AI authority / 帳戶額度與 AI 授權 |
+| [0.15.1](V0150.md) | Account budgets and AI authority / 帳戶額度與 AI 授權 |
 | [0.14.0](V0140.md) | Workspace and position automation / 工作台與持倉自動化 |
 | [Architecture](ARCHITECTURE.md) | Runtime and data flow / 執行與資料流程 |
 | [Acceptance](ACCEPTANCE.md) | Exchange execution requirements / 交易所執行驗收 |

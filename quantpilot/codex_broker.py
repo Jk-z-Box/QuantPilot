@@ -109,7 +109,7 @@ class Protocol:
             self.call(
                 "initialize",
                 {
-                    "clientInfo": {"name": "quantpilot", "title": "QuantPilot", "version": "0.15.0"},
+                    "clientInfo": {"name": "quantpilot", "title": "QuantPilot", "version": "0.15.1"},
                     "capabilities": {"experimentalApi": True},
                 },
                 15,
@@ -320,6 +320,7 @@ class Broker:
             "public_observations",
             "action_approval",
             "position_review",
+            "account_risk_review",
             "history_table",
         ):
             raise AIError("parameters")

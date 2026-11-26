@@ -1,6 +1,6 @@
 # Maintainer handoff / 維護交接
 
-Current source: 0.15.0 on main. Read README, docs/V0150.md and docs/ARCHITECTURE.md first.
+Current source: 0.15.1 on main. Read README, docs/V0150.md and docs/ARCHITECTURE.md first.
 
 - Preserve live execution gates and credential-bound certification; never equate mocks with exchange acceptance.
 - Preserve v2 accounts, positions, history generations, strategy archives, vault and server-side Codex login during upgrades.

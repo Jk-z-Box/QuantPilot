@@ -164,7 +164,8 @@ def test_unconnected_or_dead_broker_fails_closed(broker):
 
 
 @pytest.mark.parametrize(
-    "format_name", ["opportunity_review", "strategy_review", "action_approval", "position_review"]
+    "format_name",
+    ["opportunity_review", "strategy_review", "action_approval", "position_review", "account_risk_review"],
 )
 def test_model_catalog_and_sandbox(broker, format_name):
     connect(broker)

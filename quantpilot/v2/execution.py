@@ -95,7 +95,7 @@ class ExchangeBroker:
                 "cross_margin",
             )
             ready = (
-                cert["version"] == "0.15.0"
+                cert["version"] == "0.15.1"
                 and cert["exchange"] == account["exchange"]
                 and cert.get("settle") == account.get("settle", "USDT")
                 and (

@@ -1,5 +1,11 @@
 # Validation / 驗證紀錄
 
+## 0.15.1
+
+- **586 tests passed**, with no failures/skips; Ruff and syntax checks passed. This includes the full 0.15.0 regression suite.
+- Added broker coverage for the account-capital review format under the restricted permission profile, and a large multilingual review request covering all evidence collections and actual HTTPX wire bytes.
+- A read-only production-data diagnostic reproduced the previous 350,390-byte request exceeding the 256,000-byte broker limit. The patched sample was 186,688 bytes, with explicit omissions and two complete trade-evidence records instead of zero. No model request or policy change occurred in that diagnostic.
+
 ## 0.15.0
 
 - Python 3.12 local suite: **584 tests passed**, no failures/skips; 84% total line coverage. Ruff, JavaScript syntax and installer shell syntax checks passed.

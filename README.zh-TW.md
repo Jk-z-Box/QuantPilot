@@ -2,9 +2,9 @@
 
 **可自行部署的永續合約研究與交易管理工作台，優先使用模擬盤。**
 
-[English](README.md) · [部署說明](docs/DEPLOYMENT.md) · [0.15.0 更新](docs/V0150.md) · [文件索引](docs/README.md)
+[English](README.md) · [部署說明](docs/DEPLOYMENT.md) · [0.15.1 更新](docs/V0150.md) · [文件索引](docs/README.md)
 
-目前版本 **0.15.0**，最新程式位於 **main 主分支**。真實交易預設關閉。
+目前版本 **0.15.1**，最新程式位於 **main 主分支**。真實交易預設關閉。
 
 ## 主要功能
 

@@ -2,9 +2,9 @@
 
 **A self-hosted, paper-first workspace for perpetual futures research and trade management.**
 
-[繁體中文](README.zh-TW.md) · [Deployment](docs/DEPLOYMENT.md) · [0.15.0 changes](docs/V0150.md) · [Documentation](docs/README.md)
+[繁體中文](README.zh-TW.md) · [Deployment](docs/DEPLOYMENT.md) · [0.15.1 changes](docs/V0150.md) · [Documentation](docs/README.md)
 
-QuantPilot brings market context, configurable strategies, separate account ledgers and optional AI review into one responsive web console. The current release is **0.15.0**, maintained on **main**. Live execution is disabled by default.
+QuantPilot brings market context, configurable strategies, separate account ledgers and optional AI review into one responsive web console. The current release is **0.15.1**, maintained on **main**. Live execution is disabled by default.
 
 ## What you can do
 

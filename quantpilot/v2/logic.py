@@ -510,8 +510,6 @@ class LogicEngine:
             for trade in evidence["closed_trade_evidence"]:
                 trade["events_total"] = len(trade["events"])
                 trade["events"] = trade["events"][-30:]
-            while len(json.dumps(evidence)) > 100000 and evidence["closed_trade_evidence"]:
-                evidence["closed_trade_evidence"].pop()
             evidence["omitted_complete_records"] = original_count - len(evidence["closed_trade_evidence"])
             # Only explicit anonymous trade evidence leaves the server.
             payload = {
@@ -549,7 +547,7 @@ class LogicEngine:
                     }
                 },
             }
-            response = ai_client.response(prefs, self.workspace.vault, payload)
+            response = ai_client.response(prefs, self.workspace.vault, bounded_review_payload(payload))
             if response.get("status") != "completed":
                 raise AIError("incomplete")
             text = "".join(
@@ -644,6 +642,49 @@ class LogicEngine:
         if changed:
             self.invalidate()
         return result
+
+
+def bounded_review_payload(payload):
+    """Bound the complete UTF-8 request, with explicit omissions in every sample."""
+    payload = dict(payload)
+    data = json.loads(payload["input"])
+    evidence = data["trade_evidence"]
+    collections = {
+        "closed_trade_evidence": (evidence["closed_trade_evidence"], 90000),
+        "rejected_opportunities": (evidence["rejected_opportunities"], 20000),
+        "groups": (evidence["groups"], 12000),
+        "equity_curves": (evidence["equity_curves"], 20000),
+        "market_context": (data["market_context"], 30000),
+        "recent_closed_trades": (data["recent_closed_trades"], 20000),
+    }
+    counts = {key: len(rows) for key, (rows, _) in collections.items()}
+    counts["closed_trade_evidence"] += evidence.get("omitted_complete_records", 0)
+
+    def encoded(value):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+    for rows, budget in collections.values():
+        while rows and len(encoded(rows).encode()) > budget:
+            rows.pop()
+    while True:
+        data["sampling"] = {
+            "collections": {
+                key: {"total": counts[key], "included": len(rows), "omitted": counts[key] - len(rows)}
+                for key, (rows, _) in collections.items()
+            },
+            "limitation": "Omitted records remain stored locally. Missing samples are not zero or evidence of absence; do not invent them or claim full coverage.",
+        }
+        evidence["omitted_complete_records"] = counts["closed_trade_evidence"] - len(
+            evidence["closed_trade_evidence"]
+        )
+        payload["input"] = encoded(data)
+        # Include schema, instructions, JSON escaping and non-ASCII byte lengths.
+        if len(encoded(payload).encode()) <= 240000:
+            return payload
+        candidates = [rows for rows, _ in collections.values() if rows]
+        if not candidates:
+            raise ValueError("复盘配置本身超过请求容量，保留当前逻辑")
+        max(candidates, key=lambda rows: len(encoded(rows).encode())).pop()
 
 
 def assessment_schema():

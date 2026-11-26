@@ -521,6 +521,39 @@ def test_transaction_record_is_anonymous_in_ai_payload(monkeypatch, workspace):
     assert "paper-default" not in calls[0]["input"]
 
 
+def test_large_review_bounds_all_sections_without_discarding_trade_evidence(monkeypatch, workspace):
+    from quantpilot.codex_broker import MAX_BODY
+    from quantpilot.v2 import journal
+
+    add_history(workspace)
+    evidence = {
+        "closed_trade_evidence": [{"schema": 1, "missing": [], "events": [], "marker": "kept"}],
+        "rejected_opportunities": [{"detail": '失败报价\\"' * 500} for _ in range(50)],
+        "groups": [],
+        "equity_curves": [],
+        "limitations": ["Not cash-flow-adjusted"],
+    }
+    original = json.dumps(evidence)
+    monkeypatch.setattr(journal, "review_evidence", lambda *args: json.loads(original))
+    workspace.opportunities = {
+        str(n): {"symbol": f"ASSET{n}", "evidence": [{"summary": "行情背景" * 1200}], "indicators": {}}
+        for n in range(20)
+    }
+    calls = mock_review(monkeypatch, workspace)
+    workspace.logic.review()
+    wire = httpx.Request("POST", "http://localhost/response", json=calls[0]).content
+    assert len(wire) <= 240000 < MAX_BODY
+    data = json.loads(calls[0]["input"])
+    assert data["trade_evidence"]["closed_trade_evidence"][0]["marker"] == "kept"
+    assert data["trade_evidence"]["limitations"] == evidence["limitations"]
+    for key in ("rejected_opportunities", "market_context"):
+        sample = data["sampling"]["collections"][key]
+        assert sample["omitted"] > 0
+        assert sample["total"] == sample["included"] + sample["omitted"]
+    assert data["trade_evidence"]["omitted_complete_records"] == 0
+    assert json.dumps(evidence) == original
+
+
 def test_update_job_success_and_failure(monkeypatch, workspace, tmp_path):
     from types import SimpleNamespace
 
